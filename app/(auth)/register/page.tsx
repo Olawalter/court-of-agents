@@ -8,20 +8,17 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 
-interface WalletInfo {
-  address: string;
-  private_key: string;
-  username: string;
-}
-
 export default function RegisterPage() {
   const [username, setUsername] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [walletInfo, setWalletInfo] = useState<WalletInfo | null>(null);
+  const [generatedKey, setGeneratedKey] = useState("");
+  const [generatedAddress, setGeneratedAddress] = useState("");
   const [keySaved, setKeySaved] = useState(false);
+  const [showKey, setShowKey] = useState(false);
+  const [copied, setCopied] = useState(false);
   const router = useRouter();
-  const { connect } = useWallet();
+  const { createWallet } = useWallet();
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -42,16 +39,13 @@ export default function RegisterPage() {
       });
 
       const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to create wallet");
 
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to create wallet");
-      }
+      setGeneratedKey(data.private_key);
+      setGeneratedAddress(data.address);
 
-      setWalletInfo({
-        address: data.address,
-        private_key: data.private_key,
-        username: data.username,
-      });
+      // Save encrypted to IndexedDB + Supabase profile
+      await createWallet(data.address, data.private_key, username);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
     } finally {
@@ -59,15 +53,18 @@ export default function RegisterPage() {
     }
   }
 
-  function handleContinue() {
-    if (walletInfo) {
-      connect(walletInfo.address, walletInfo.private_key, walletInfo.username);
-      router.push("/dashboard");
-    }
+  async function handleCopyKey() {
+    await navigator.clipboard.writeText(generatedKey);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   }
 
-  // Show wallet info after creation
-  if (walletInfo) {
+  function handleContinue() {
+    router.push("/dashboard");
+  }
+
+  // ─── Post-creation: show wallet info ───
+  if (generatedKey) {
     return (
       <main className="flex min-h-screen items-center justify-center px-6">
         <div className="w-full max-w-md">
@@ -77,7 +74,7 @@ export default function RegisterPage() {
             </div>
             <h1 className="text-2xl font-bold text-neutral-900">Wallet Created!</h1>
             <p className="mt-1 text-sm text-neutral-600">
-              Your GenLayer wallet is ready. Save your private key below.
+              Your GenLayer wallet is ready and encrypted on this device.
             </p>
           </div>
 
@@ -87,7 +84,7 @@ export default function RegisterPage() {
                 Username
               </label>
               <div className="rounded-lg bg-white border border-neutral-200 px-3 py-2 text-sm text-neutral-900">
-                {walletInfo.username}
+                {username}
               </div>
             </div>
 
@@ -96,7 +93,7 @@ export default function RegisterPage() {
                 Wallet Address
               </label>
               <div className="rounded-lg bg-white border border-neutral-200 px-3 py-2 font-mono text-sm text-neutral-900 break-all">
-                {walletInfo.address}
+                {generatedAddress}
               </div>
             </div>
 
@@ -104,18 +101,39 @@ export default function RegisterPage() {
               <label className="block text-xs font-medium text-neutral-500 uppercase mb-1">
                 Private Key
               </label>
-              <div className="rounded-lg bg-white border border-red-200 px-3 py-2 font-mono text-xs text-neutral-900 break-all select-all">
-                {walletInfo.private_key}
-              </div>
+              {showKey ? (
+                <div className="space-y-2">
+                  <div className="rounded-lg bg-white border border-red-200 px-3 py-2 font-mono text-xs text-neutral-900 break-all select-all">
+                    {generatedKey}
+                  </div>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={handleCopyKey}
+                    className="w-full"
+                  >
+                    {copied ? "Copied!" : "Copy Private Key"}
+                  </Button>
+                </div>
+              ) : (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setShowKey(true)}
+                  className="w-full"
+                >
+                  Reveal Private Key
+                </Button>
+              )}
             </div>
           </Card>
 
           <Card className="mb-6 border-red-200 bg-red-50">
             <p className="text-sm font-semibold text-red-700">
-              Save your private key now!
+              Back up your private key!
             </p>
             <p className="text-xs text-red-600 mt-1">
-              This is the ONLY way to access your wallet. It cannot be recovered if lost. You need it to sign all transactions on GenLayer.
+              Your private key is encrypted on this device, but if you clear browser data or switch devices, you will need it to recover your wallet. It cannot be recovered if lost.
             </p>
           </Card>
 
@@ -144,6 +162,7 @@ export default function RegisterPage() {
     );
   }
 
+  // ─── Registration form ───
   return (
     <main className="flex min-h-screen items-center justify-center px-6">
       <div className="w-full max-w-sm">
@@ -158,7 +177,7 @@ export default function RegisterPage() {
           </Link>
           <h1 className="text-2xl font-bold text-neutral-900">Create Wallet</h1>
           <p className="mt-1 text-sm text-neutral-600">
-            Generate a GenLayer wallet to join the Court of Agents. All interactions go on-chain.
+            Generate a GenLayer wallet. Your private key is encrypted and stored on this device only.
           </p>
         </div>
 
@@ -183,7 +202,7 @@ export default function RegisterPage() {
         <p className="mt-6 text-center text-sm text-neutral-600">
           Already have a wallet?{" "}
           <Link href="/login" className="text-brand-600 hover:underline">
-            Connect it
+            Import it
           </Link>
         </p>
       </div>

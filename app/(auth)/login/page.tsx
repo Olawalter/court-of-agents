@@ -9,18 +9,21 @@ import { Input } from "@/components/ui/input";
 
 export default function LoginPage() {
   const [privateKey, setPrivateKey] = useState("");
+  const [username, setUsername] = useState("");
+  const [needsUsername, setNeedsUsername] = useState(false);
+  const [derivedAddress, setDerivedAddress] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const router = useRouter();
-  const { connect } = useWallet();
+  const { importWallet } = useWallet();
 
-  async function handleConnect(e: React.FormEvent) {
+  async function handleImport(e: React.FormEvent) {
     e.preventDefault();
     setError("");
     setLoading(true);
 
     try {
-      // Validate private key by calling the API
+      // Validate private key and derive address
       const res = await fetch("/api/wallet/connect", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -28,20 +31,86 @@ export default function LoginPage() {
       });
 
       const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Invalid private key");
 
-      if (!res.ok) {
-        throw new Error(data.error || "Invalid private key");
+      // Import wallet — checks IndexedDB + Supabase for existing profile
+      const result = await importWallet(privateKey.trim(), data.address);
+
+      if (result.isNewProfile && !result.username) {
+        // No profile found anywhere — ask for username
+        setDerivedAddress(data.address);
+        setNeedsUsername(true);
+        setLoading(false);
+        return;
       }
 
-      connect(data.address, privateKey.trim(), data.username || data.address.slice(0, 8));
       router.push("/dashboard");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to connect wallet");
+      setError(err instanceof Error ? err.message : "Failed to import wallet");
     } finally {
       setLoading(false);
     }
   }
 
+  async function handleSetUsername(e: React.FormEvent) {
+    e.preventDefault();
+    setError("");
+    setLoading(true);
+
+    if (username.length < 3) {
+      setError("Username must be at least 3 characters");
+      setLoading(false);
+      return;
+    }
+
+    try {
+      await importWallet(privateKey.trim(), derivedAddress, username);
+      router.push("/dashboard");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save profile");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // ─── Username prompt (for new imports without existing profile) ───
+  if (needsUsername) {
+    return (
+      <main className="flex min-h-screen items-center justify-center px-6">
+        <div className="w-full max-w-sm">
+          <div className="mb-8">
+            <h1 className="text-2xl font-bold text-neutral-900">Set Username</h1>
+            <p className="mt-1 text-sm text-neutral-600">
+              No profile found for this wallet. Choose a username.
+            </p>
+            <p className="mt-2 text-xs text-neutral-400 font-mono">
+              {derivedAddress}
+            </p>
+          </div>
+
+          <form onSubmit={handleSetUsername} className="space-y-4">
+            <Input
+              label="Username"
+              type="text"
+              placeholder="judge_dredd"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              required
+              minLength={3}
+            />
+
+            {error && <p className="text-sm text-red-600">{error}</p>}
+
+            <Button type="submit" className="w-full" disabled={loading}>
+              {loading ? "Saving..." : "Save & Continue"}
+            </Button>
+          </form>
+        </div>
+      </main>
+    );
+  }
+
+  // ─── Import form ───
   return (
     <main className="flex min-h-screen items-center justify-center px-6">
       <div className="w-full max-w-sm">
@@ -54,13 +123,13 @@ export default function LoginPage() {
               Court of Agents
             </span>
           </Link>
-          <h1 className="text-2xl font-bold text-neutral-900">Connect Wallet</h1>
+          <h1 className="text-2xl font-bold text-neutral-900">Import Wallet</h1>
           <p className="mt-1 text-sm text-neutral-600">
-            Enter your GenLayer private key to sign in.
+            Enter your private key to restore your wallet. Your username will be recovered automatically.
           </p>
         </div>
 
-        <form onSubmit={handleConnect} className="space-y-4">
+        <form onSubmit={handleImport} className="space-y-4">
           <Input
             label="Private Key"
             type="password"
@@ -73,7 +142,7 @@ export default function LoginPage() {
           {error && <p className="text-sm text-red-600">{error}</p>}
 
           <Button type="submit" className="w-full" disabled={loading}>
-            {loading ? "Connecting..." : "Connect Wallet"}
+            {loading ? "Importing..." : "Import Wallet"}
           </Button>
         </form>
 
