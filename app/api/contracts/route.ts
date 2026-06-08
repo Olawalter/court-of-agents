@@ -54,6 +54,27 @@ function sanitize(val: unknown): unknown {
   return val;
 }
 
+// Last-line-of-defense: coerce any arg to a safe ASCII string right before sending to contract.
+// This catches anything sanitize() might have missed (e.g., non-string values cast to string
+// containing unicode surrogates, or numbers that somehow have weird string representations).
+function safeStr(val: unknown): string {
+  const s = String(val ?? "");
+  let out = "";
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    if (code <= 0x7E && code >= 0x20) { out += s[i]; continue; } // printable ASCII fast-path
+    if (code === 0x09 || code === 0x0A || code === 0x0D) { out += " "; continue; } // tab/LF/CR → space
+    if (code === 0x2018 || code === 0x2019) { out += "'"; continue; }
+    if (code === 0x201C || code === 0x201D) { out += '"'; continue; }
+    if (code === 0x2013 || code === 0x2014) { out += "-"; continue; }
+    if (code === 0x2026) { out += "..."; continue; }
+    if (code === 0x00A0) { out += " "; continue; }
+    if (code > 0x1F && code <= 0xFF) { out += s[i]; continue; } // other Latin-1 printable
+    // skip everything else (BOM, zero-width, surrogates, etc.)
+  }
+  return out;
+}
+
 export async function POST(request: Request) {
   try {
     const body = await request.json();
@@ -68,7 +89,20 @@ export async function POST(request: Request) {
 
     const { action, params, private_key } = parsed.data;
     const p = sanitize(params) as Record<string, unknown>;
-    const key = private_key ? cleanStr(private_key) : undefined;
+
+    // Strip BOM and any non-hex chars from the private key
+    let key: string | undefined;
+    if (private_key) {
+      const stripped = cleanStr(private_key);
+      // A valid EVM private key is 0x followed by 64 hex chars (66 chars total)
+      // or 32 raw bytes (64 hex chars without prefix)
+      if (/^0x[0-9a-fA-F]{64}$/.test(stripped) || /^[0-9a-fA-F]{64}$/.test(stripped)) {
+        key = stripped;
+      } else {
+        console.error("[contracts] Invalid private key format after cleaning. Length:", stripped.length, "First char code:", stripped.charCodeAt(0));
+        // Fall back to server key
+      }
+    }
 
     const { client } = key
       ? getGenLayerClientForUser(key)
@@ -81,16 +115,24 @@ export async function POST(request: Request) {
 
     if (action === "submit_case") {
       if (!adjAddr) return NextResponse.json({ error: "Adjudicator not configured" }, { status: 503 });
+      // safeStr() is applied here as a final guard — sanitize() already ran on params above,
+      // but this ensures the exact bytes going into the SDK are Latin-1 safe.
+      const submitArgs: [string, string, string, string, number, string, string, string, string, string, string, string] = [
+        safeStr(p.case_id), safeStr(p.title), safeStr(p.description),
+        safeStr(p.category), Number(p.difficulty) || 1,
+        safeStr(p.claim_a_name), safeStr(p.claim_a_summary), safeStr(p.claim_a_argument),
+        safeStr(p.claim_b_name), safeStr(p.claim_b_summary), safeStr(p.claim_b_argument),
+        safeStr(p.evidence_summary),
+      ];
+      console.log("[submit_case] args char-code check:", submitArgs.map((a, i) =>
+        typeof a === "string"
+          ? `[${i}]len=${a.length},max=${a.split("").reduce((m, c) => Math.max(m, c.charCodeAt(0)), 0)}`
+          : `[${i}]num=${a}`
+      ).join(" "));
       const hash = await client.writeContract({ value: BigInt(0),
         address: adjAddr,
         functionName: "submit_case",
-        args: [
-          p.case_id as string, p.title as string, p.description as string,
-          p.category as string, p.difficulty as number,
-          p.claim_a_name as string, p.claim_a_summary as string, p.claim_a_argument as string,
-          p.claim_b_name as string, p.claim_b_summary as string, p.claim_b_argument as string,
-          p.evidence_summary as string,
-        ],
+        args: submitArgs,
       });
       return NextResponse.json({ tx_hash: hash, status: "submitted" });
     }
@@ -212,8 +254,10 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });
   } catch (err) {
-    console.error("Contract interaction error:", err);
     const message = err instanceof Error ? err.message : "Contract interaction failed";
+    const stack = err instanceof Error ? err.stack : undefined;
+    console.error("[contracts] Error:", message);
+    if (stack) console.error("[contracts] Stack:", stack);
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
