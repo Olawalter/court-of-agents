@@ -18,24 +18,63 @@ const categories = [
   { value: "contract_interpretation", label: "Contract Interpretation" },
 ];
 
-// Client-side guard: strip BOM and invisible Unicode before sending to the API.
-// The API also sanitizes, but catching it here gives a cleaner user experience.
-function sanitizeInput(s: string): string {
+/**
+ * cleanText — sanitize any user-entered string before it is sent to the API
+ * or the GenLayer contract.
+ *
+ * Steps (mirrors the server-side cleanStr in /api/contracts/route.ts):
+ *  1. NFC-normalize so composed/decomposed forms are consistent.
+ *  2. Strip BOM (0xFEFF), reverse-BOM (0xFFFE), zero-width spaces/joiners,
+ *     null bytes, and the replacement character — all invisible and unsafe
+ *     for HTTP headers and contract byte-string encoding.
+ *  3. Replace smart quotes, em/en-dashes, ellipsis, bullets, NBSP with
+ *     their plain ASCII equivalents so the server never sees them.
+ *  4. Trim trailing/leading whitespace.
+ *
+ * Do NOT use btoa() or charCodeAt()-based byte conversion on contract args —
+ * pass cleaned strings directly; the SDK encodes via TextEncoder internally.
+ */
+function cleanText(value: string): string {
+  // 1 — NFC normalise first so combining characters are composed
+  let s = value.normalize("NFC");
+
+  // 2 — strip invisible / control characters by char code (no regex literals
+  //     containing the BOM char itself, which transpilers may silently strip)
   let out = "";
   for (let i = 0; i < s.length; i++) {
     const code = s.charCodeAt(i);
+
+    // Invisible / unsafe — drop entirely
+    if (
+      code === 0xFEFF || code === 0xFFFE || code === 0xFFFF || // BOM / rev-BOM
+      code === 0x200B || code === 0x200C || code === 0x200D || // ZW space/non-joiner/joiner
+      code === 0x2060 || code === 0x2061 ||                    // word-joiner, function-app
+      code === 0x0000 || code === 0xFFFD ||                    // null, replacement char
+      code === 0x00AD                                           // soft hyphen
+    ) { continue; }
+
+    // Smart quotes → straight
     if (code === 0x2018 || code === 0x2019) { out += "'"; continue; }
     if (code === 0x201C || code === 0x201D) { out += '"'; continue; }
+    if (code === 0x00AB || code === 0x00BB) { out += '"'; continue; }
+
+    // Em-dash / en-dash / horizontal bar → hyphen
     if (code === 0x2013 || code === 0x2014 || code === 0x2015) { out += "-"; continue; }
+
+    // Horizontal ellipsis → three dots
     if (code === 0x2026) { out += "..."; continue; }
-    if (code === 0x2022 || code === 0x2023 || code === 0x2043 || code === 0x25CF || code === 0x25E6) { out += "-"; continue; }
+
+    // Various bullet characters → hyphen
+    if (code === 0x2022 || code === 0x2023 || code === 0x2043 ||
+        code === 0x25CF || code === 0x25E6) { out += "-"; continue; }
+
+    // Non-breaking space → regular space
     if (code === 0x00A0) { out += " "; continue; }
-    if (code === 0xFEFF || code === 0xFFFE || code === 0xFFFF ||
-        code === 0x200B || code === 0x200C || code === 0x200D ||
-        code === 0x0000 || code === 0xFFFD) { continue; }
-    if (code > 0xFF) { continue; }
+
+    // Keep everything else (including normal Unicode text)
     out += s[i];
   }
+
   return out.trim();
 }
 
@@ -82,11 +121,22 @@ export default function CreateCasePage() {
     setError("");
     setStep("submitting");
 
-    // Sanitize all user-entered strings client-side before sending
-    const s = sanitizeInput;
-    const cleanTitle = s(title);
-    const cleanDesc = s(description);
-    const cleanEvidence = s(evidence) || "No additional evidence provided.";
+    // Clean every user-entered string: NFC-normalise, strip BOM + zero-width
+    // chars, replace smart punctuation with ASCII equivalents.
+    // Do NOT use btoa() or charCodeAt() byte conversion on these strings —
+    // the GenLayer SDK encodes via TextEncoder internally.
+    const c = cleanText;
+    const cleanTitle       = c(title);
+    const cleanDesc        = c(description);
+    const cleanAName       = c(claimAName);
+    const cleanASummary    = c(claimASummary);
+    const cleanAArgument   = c(claimAArgument);
+    const cleanAOutcome    = c(claimAOutcome);
+    const cleanBName       = c(claimBName);
+    const cleanBSummary    = c(claimBSummary);
+    const cleanBArgument   = c(claimBArgument);
+    const cleanBOutcome    = c(claimBOutcome);
+    const cleanEvidence    = c(evidence) || "No additional evidence provided.";
 
     try {
       // ── Step 1: Save to Supabase ──────────────────────────────────────────
@@ -100,16 +150,16 @@ export default function CreateCasePage() {
           category,
           difficulty,
           claim_a: {
-            agent_name: s(claimAName),
-            summary: s(claimASummary),
-            detailed_argument: s(claimAArgument),
-            requested_outcome: s(claimAOutcome),
+            agent_name: cleanAName,
+            summary: cleanASummary,
+            detailed_argument: cleanAArgument,
+            requested_outcome: cleanAOutcome,
           },
           claim_b: {
-            agent_name: s(claimBName),
-            summary: s(claimBSummary),
-            detailed_argument: s(claimBArgument),
-            requested_outcome: s(claimBOutcome),
+            agent_name: cleanBName,
+            summary: cleanBSummary,
+            detailed_argument: cleanBArgument,
+            requested_outcome: cleanBOutcome,
           },
         }),
       });
@@ -133,13 +183,13 @@ export default function CreateCasePage() {
             description: cleanDesc,
             category,
             difficulty,
-            claim_a_name: s(claimAName),
-            claim_a_summary: s(claimASummary),
-            claim_a_argument: s(claimAArgument),
-            claim_b_name: s(claimBName),
-            claim_b_summary: s(claimBSummary),
-            claim_b_argument: s(claimBArgument),
-            evidence_summary: cleanEvidence,
+            claim_a_name:      cleanAName,
+            claim_a_summary:   cleanASummary,
+            claim_a_argument:  cleanAArgument,
+            claim_b_name:      cleanBName,
+            claim_b_summary:   cleanBSummary,
+            claim_b_argument:  cleanBArgument,
+            evidence_summary:  cleanEvidence,
           },
         }),
       });

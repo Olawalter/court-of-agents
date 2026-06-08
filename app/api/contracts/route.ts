@@ -13,9 +13,11 @@ const requestSchema = z.object({
   params: z.record(z.unknown()).default({}),
 });
 
-// GenLayer SDK requires ByteString args (all chars must be <= 255).
-// Replace common non-ASCII with ASCII equivalents, strip anything still > 255.
+// Sanitize a contract arg string: NFC-normalise, strip BOM + invisibles,
+// replace smart punctuation, then drop anything > 255 that remains.
 function cleanStr(s: string): string {
+  // NFC first so combining sequences are pre-composed before char-code checks
+  s = s.normalize("NFC");
   let out = '';
   for (let i = 0; i < s.length; i++) {
     const code = s.charCodeAt(i);
