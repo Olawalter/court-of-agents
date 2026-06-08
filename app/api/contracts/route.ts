@@ -13,22 +13,34 @@ const requestSchema = z.object({
   params: z.record(z.unknown()).default({}),
 });
 
-// Strip BOM (U+FEFF), zero-width chars, and other invisible Unicode from strings
+// GenLayer SDK requires ByteString args (all chars must be <= 255).
+// Replace common non-ASCII with ASCII equivalents, strip anything still > 255.
 function cleanStr(s: string): string {
-  let result = "";
+  let out = '';
   for (let i = 0; i < s.length; i++) {
     const code = s.charCodeAt(i);
-    // Skip: BOM, zero-width space, ZWNJ, ZWJ, replacement chars
+    // Smart single quotes / backtick / acute -> apostrophe
+    if (code === 0x2018 || code === 0x2019 || code === 0x0060 || code === 0x00B4) { out += "'"; continue; }
+    // Smart double quotes / guillemets -> straight quote
+    if (code === 0x201C || code === 0x201D || code === 0x00AB || code === 0x00BB) { out += '"'; continue; }
+    // En-dash / em-dash / horizontal bar -> hyphen
+    if (code === 0x2013 || code === 0x2014 || code === 0x2015) { out += '-'; continue; }
+    // Ellipsis -> three dots
+    if (code === 0x2026) { out += '...'; continue; }
+    // Bullets -> hyphen
+    if (code === 0x2022 || code === 0x2023 || code === 0x2043 || code === 0x25CF || code === 0x25E6) { out += '-'; continue; }
+    // Non-breaking space -> regular space
+    if (code === 0x00A0) { out += ' '; continue; }
+    // Strip: BOM, reverse BOM, zero-width, invisible, replacement char, null
     if (code === 0xFEFF || code === 0xFFFE || code === 0xFFFF ||
         code === 0x200B || code === 0x200C || code === 0x200D ||
-        code === 0x00 || code === 0xFFFD) {
-      continue;
-    }
-    result += s[i];
+        code === 0x0000 || code === 0xFFFD) { continue; }
+    // Strip anything else above 255 (can't be encoded as ByteString)
+    if (code > 0xFF) { continue; }
+    out += s[i];
   }
-  return result.trim();
+  return out.trim();
 }
-
 function sanitize(val: unknown): unknown {
   if (typeof val === "string") return cleanStr(val);
   if (Array.isArray(val)) return val.map(sanitize);
