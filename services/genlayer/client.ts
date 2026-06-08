@@ -1,7 +1,12 @@
 import { createClient, createAccount, generatePrivateKey, chains } from "genlayer-js";
 
-// Strip BOM (U+FEFF) and other invisible prefix characters from env vars
-const stripBOM = (s: string | undefined): string => (s ?? "").replace(/^[﻿￾]+/, "");
+// Strip BOM (char code 65279 = 0xFEFF) from the start of an env var string.
+// Vercel env vars can acquire a BOM prefix when pasted from Windows UTF-8 files.
+const stripBOM = (s: string | undefined): string => {
+  let str = s ?? "";
+  while (str.charCodeAt(0) === 0xFEFF) str = str.slice(1);
+  return str;
+};
 
 export const CONTRACT_ADDRESSES = {
   adjudicator: stripBOM(process.env.NEXT_PUBLIC_ADJUDICATOR_CONTRACT_ADDRESS) as `0x${string}`,

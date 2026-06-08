@@ -3,8 +3,13 @@ import { createClient } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
 import type { Database } from "@/types/database";
 
-// Strip BOM (U+FEFF) and other invisible prefix characters that break HTTP header validation
-const stripBOM = (s: string | undefined): string => (s ?? "").replace(/^[﻿￾]+/, "");
+// Strip BOM (char code 65279 = 0xFEFF) from the start of an env var string.
+// Vercel env vars can acquire a BOM prefix when pasted from Windows UTF-8 files.
+const stripBOM = (s: string | undefined): string => {
+  let str = s ?? "";
+  while (str.charCodeAt(0) === 0xFEFF) str = str.slice(1);
+  return str;
+};
 
 /**
  * Server client with user's auth context (respects RLS).
