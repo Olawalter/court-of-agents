@@ -81,7 +81,7 @@ export async function POST(request: Request) {
 
     if (action === "submit_case") {
       if (!adjAddr) return NextResponse.json({ error: "Adjudicator not configured" }, { status: 503 });
-      const hash = await client.writeContract({
+      const hash = await client.writeContract({ value: BigInt(0),
         address: adjAddr,
         functionName: "submit_case",
         args: [
@@ -97,7 +97,7 @@ export async function POST(request: Request) {
 
     if (action === "run_judges") {
       if (!adjAddr) return NextResponse.json({ error: "Adjudicator not configured" }, { status: 503 });
-      const hash = await client.writeContract({
+      const hash = await client.writeContract({ value: BigInt(0),
         address: adjAddr, functionName: "run_judges", args: [p.case_id as string],
       });
       return NextResponse.json({ tx_hash: hash, status: "judges_running" });
@@ -105,7 +105,7 @@ export async function POST(request: Request) {
 
     if (action === "calculate_consensus") {
       if (!adjAddr) return NextResponse.json({ error: "Adjudicator not configured" }, { status: 503 });
-      const hash = await client.writeContract({
+      const hash = await client.writeContract({ value: BigInt(0),
         address: adjAddr, functionName: "calculate_consensus", args: [p.case_id as string],
       });
       return NextResponse.json({ tx_hash: hash, status: "consensus_calculating" });
@@ -113,7 +113,7 @@ export async function POST(request: Request) {
 
     if (action === "submit_user_decision") {
       if (!adjAddr) return NextResponse.json({ error: "Adjudicator not configured" }, { status: 503 });
-      const hash = await client.writeContract({
+      const hash = await client.writeContract({ value: BigInt(0),
         address: adjAddr, functionName: "submit_user_decision",
         args: [p.case_id as string, p.user_address as string, p.decision as string, p.reasoning as string],
       });
@@ -153,7 +153,7 @@ export async function POST(request: Request) {
     // ─── REPUTATION ───
     if (action === "register_user") {
       if (!repAddr) return NextResponse.json({ error: "Reputation not configured" }, { status: 503 });
-      const hash = await client.writeContract({
+      const hash = await client.writeContract({ value: BigInt(0),
         address: repAddr, functionName: "register_user", args: [p.user_address as string, p.username as string],
       });
       return NextResponse.json({ tx_hash: hash, status: "user_registered" });
@@ -161,7 +161,7 @@ export async function POST(request: Request) {
 
     if (action === "update_after_decision") {
       if (!repAddr) return NextResponse.json({ error: "Reputation not configured" }, { status: 503 });
-      const hash = await client.writeContract({
+      const hash = await client.writeContract({ value: BigInt(0),
         address: repAddr, functionName: "update_after_decision", args: [p.user_address as string, p.is_correct as boolean],
       });
       return NextResponse.json({ tx_hash: hash, status: "reputation_updated" });
@@ -182,7 +182,7 @@ export async function POST(request: Request) {
     // ─── DISPUTE REGISTRY ───
     if (action === "register_dispute") {
       if (!regAddr) return NextResponse.json({ error: "Registry not configured" }, { status: 503 });
-      const hash = await client.writeContract({
+      const hash = await client.writeContract({ value: BigInt(0),
         address: regAddr, functionName: "register_dispute",
         args: [p.dispute_id as string, p.title as string, p.category as string, p.submitter_address as string],
       });
@@ -191,7 +191,7 @@ export async function POST(request: Request) {
 
     if (action === "resolve_dispute") {
       if (!regAddr) return NextResponse.json({ error: "Registry not configured" }, { status: 503 });
-      const hash = await client.writeContract({
+      const hash = await client.writeContract({ value: BigInt(0),
         address: regAddr, functionName: "resolve_dispute",
         args: [p.dispute_id as string, p.verdict as string, p.confidence as number],
       });

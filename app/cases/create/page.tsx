@@ -18,12 +18,35 @@ const categories = [
   { value: "contract_interpretation", label: "Contract Interpretation" },
 ];
 
+// Client-side guard: strip BOM and invisible Unicode before sending to the API.
+// The API also sanitizes, but catching it here gives a cleaner user experience.
+function sanitizeInput(s: string): string {
+  let out = "";
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    if (code === 0x2018 || code === 0x2019) { out += "'"; continue; }
+    if (code === 0x201C || code === 0x201D) { out += '"'; continue; }
+    if (code === 0x2013 || code === 0x2014 || code === 0x2015) { out += "-"; continue; }
+    if (code === 0x2026) { out += "..."; continue; }
+    if (code === 0x2022 || code === 0x2023 || code === 0x2043 || code === 0x25CF || code === 0x25E6) { out += "-"; continue; }
+    if (code === 0x00A0) { out += " "; continue; }
+    if (code === 0xFEFF || code === 0xFFFE || code === 0xFFFF ||
+        code === 0x200B || code === 0x200C || code === 0x200D ||
+        code === 0x0000 || code === 0xFFFD) { continue; }
+    if (code > 0xFF) { continue; }
+    out += s[i];
+  }
+  return out.trim();
+}
+
 export default function CreateCasePage() {
   const { connected, address, privateKey } = useWallet();
   const router = useRouter();
-  const [loading, setLoading] = useState(false);
+  const [step, setStep] = useState<"form" | "submitting" | "success">("form");
+  const [submitStage, setSubmitStage] = useState("");
   const [error, setError] = useState("");
   const [txHash, setTxHash] = useState("");
+  const [savedCaseId, setSavedCaseId] = useState("");
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -47,9 +70,7 @@ export default function CreateCasePage() {
           <Card className="text-center py-8 px-12">
             <h2 className="text-lg font-semibold text-neutral-900 mb-2">Connect Your Wallet</h2>
             <p className="text-sm text-neutral-600 mb-4">You need a wallet to create cases on-chain.</p>
-            <Link href="/login">
-              <Button>Connect Wallet</Button>
-            </Link>
+            <Link href="/login"><Button>Connect Wallet</Button></Link>
           </Card>
         </main>
       </div>
@@ -59,44 +80,47 @@ export default function CreateCasePage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
-    setLoading(true);
+    setStep("submitting");
 
-    const caseId = crypto.randomUUID();
+    // Sanitize all user-entered strings client-side before sending
+    const s = sanitizeInput;
+    const cleanTitle = s(title);
+    const cleanDesc = s(description);
+    const cleanEvidence = s(evidence) || "No additional evidence provided.";
 
     try {
-      // Step 1: Submit to Supabase for fast reads
+      // ── Step 1: Save to Supabase ──────────────────────────────────────────
+      setSubmitStage("Saving case...");
       const supaRes = await fetch("/api/cases", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          title,
-          description,
+          title: cleanTitle,
+          description: cleanDesc,
           category,
           difficulty,
           claim_a: {
-            agent_name: claimAName,
-            summary: claimASummary,
-            detailed_argument: claimAArgument,
-            requested_outcome: claimAOutcome,
+            agent_name: s(claimAName),
+            summary: s(claimASummary),
+            detailed_argument: s(claimAArgument),
+            requested_outcome: s(claimAOutcome),
           },
           claim_b: {
-            agent_name: claimBName,
-            summary: claimBSummary,
-            detailed_argument: claimBArgument,
-            requested_outcome: claimBOutcome,
+            agent_name: s(claimBName),
+            summary: s(claimBSummary),
+            detailed_argument: s(claimBArgument),
+            requested_outcome: s(claimBOutcome),
           },
         }),
       });
 
-      if (!supaRes.ok) {
-        const data = await supaRes.json();
-        throw new Error(data.error || "Failed to create case");
-      }
-
       const supaData = await supaRes.json();
-      const savedCaseId = supaData.id;
+      if (!supaRes.ok) throw new Error(supaData.error || "Failed to save case");
+      const caseId = supaData.id as string;
+      setSavedCaseId(caseId);
 
-      // Step 2: Submit to GenLayer contract
+      // ── Step 2: Submit to GenLayer contract ───────────────────────────────
+      setSubmitStage("Submitting on-chain...");
       const contractRes = await fetch("/api/contracts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -104,28 +128,28 @@ export default function CreateCasePage() {
           action: "submit_case",
           private_key: privateKey,
           params: {
-            case_id: savedCaseId,
-            title,
-            description,
+            case_id: caseId,
+            title: cleanTitle,
+            description: cleanDesc,
             category,
             difficulty,
-            claim_a_name: claimAName,
-            claim_a_summary: claimASummary,
-            claim_a_argument: claimAArgument,
-            claim_b_name: claimBName,
-            claim_b_summary: claimBSummary,
-            claim_b_argument: claimBArgument,
-            evidence_summary: evidence || "No additional evidence provided.",
+            claim_a_name: s(claimAName),
+            claim_a_summary: s(claimASummary),
+            claim_a_argument: s(claimAArgument),
+            claim_b_name: s(claimBName),
+            claim_b_summary: s(claimBSummary),
+            claim_b_argument: s(claimBArgument),
+            evidence_summary: cleanEvidence,
           },
         }),
       });
 
       const contractData = await contractRes.json();
-      if (contractData.tx_hash) {
-        setTxHash(contractData.tx_hash);
-      }
+      if (!contractRes.ok) throw new Error(contractData.error || "On-chain submission failed");
+      if (contractData.tx_hash) setTxHash(contractData.tx_hash);
 
-      // Step 3: Also register in dispute registry
+      // ── Step 3: Register in dispute registry (non-blocking) ───────────────
+      setSubmitStage("Registering dispute...");
       await fetch("/api/contracts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -133,37 +157,87 @@ export default function CreateCasePage() {
           action: "register_dispute",
           private_key: privateKey,
           params: {
-            dispute_id: savedCaseId,
-            title,
+            dispute_id: caseId,
+            title: cleanTitle,
             category,
             submitter_address: address,
           },
         }),
-      });
+      }).catch(() => {}); // non-critical — don't block on failure
 
-      router.push(`/cases/${savedCaseId}`);
+      setStep("success");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
-    } finally {
-      setLoading(false);
+      setStep("form");
     }
   }
 
+  // ── Success screen ─────────────────────────────────────────────────────────
+  if (step === "success") {
+    return (
+      <div className="flex min-h-screen flex-col">
+        <Header />
+        <main className="flex flex-1 items-center justify-center px-6">
+          <div className="w-full max-w-md text-center">
+            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-green-100 text-3xl">
+              ✓
+            </div>
+            <h1 className="text-2xl font-bold text-neutral-900 mb-2">Case Submitted!</h1>
+            <p className="text-sm text-neutral-600 mb-6">
+              Your case has been saved and recorded on GenLayer StudioNet.
+            </p>
+
+            {txHash && (
+              <Card className="mb-6 text-left">
+                <div className="text-xs text-neutral-500 uppercase mb-1">Transaction Hash</div>
+                <div className="font-mono text-xs text-neutral-700 break-all">{txHash}</div>
+              </Card>
+            )}
+
+            <div className="flex gap-3 justify-center">
+              <Button onClick={() => router.push(`/cases/${savedCaseId}`)}>
+                View Case
+              </Button>
+              <Button variant="secondary" onClick={() => router.push("/cases")}>
+                All Cases
+              </Button>
+            </div>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  // ── Submitting overlay ─────────────────────────────────────────────────────
+  if (step === "submitting") {
+    return (
+      <div className="flex min-h-screen flex-col">
+        <Header />
+        <main className="flex flex-1 items-center justify-center">
+          <div className="text-center">
+            <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-4 border-brand-200 border-t-brand-600" />
+            <p className="text-sm font-medium text-neutral-700">{submitStage}</p>
+            <p className="mt-1 text-xs text-neutral-400">This may take a few seconds</p>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  // ── Form ───────────────────────────────────────────────────────────────────
   return (
     <div className="flex min-h-screen flex-col">
       <Header />
       <main className="mx-auto w-full max-w-3xl px-6 py-10">
         <div className="mb-8">
           <Link href="/cases" className="text-sm text-neutral-500 hover:text-neutral-700">
-            ← Back to Cases
+            &larr; Back to Cases
           </Link>
           <h1 className="mt-4 text-3xl font-bold text-neutral-900">Create a Case</h1>
           <p className="mt-1 text-neutral-600">
             Submit a dispute between two AI agents. It will be recorded on GenLayer StudioNet.
           </p>
-          <p className="mt-1 text-xs text-neutral-400 font-mono">
-            Submitting from: {address}
-          </p>
+          <p className="mt-1 text-xs text-neutral-400 font-mono">Submitting from: {address}</p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-6">
@@ -180,7 +254,9 @@ export default function CreateCasePage() {
                 minLength={5}
               />
               <div>
-                <label className="block text-sm font-medium text-neutral-700 mb-1">Description</label>
+                <label className="block text-sm font-medium text-neutral-700 mb-1">
+                  Description <span className="text-neutral-400 font-normal">(min 20 chars)</span>
+                </label>
                 <textarea
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
@@ -205,14 +281,14 @@ export default function CreateCasePage() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-neutral-700 mb-1">Difficulty (1-5)</label>
+                  <label className="block text-sm font-medium text-neutral-700 mb-1">Difficulty (1–5)</label>
                   <select
                     value={difficulty}
                     onChange={(e) => setDifficulty(Number(e.target.value))}
                     className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none"
                   >
                     {[1, 2, 3, 4, 5].map((d) => (
-                      <option key={d} value={d}>{d} — {"★".repeat(d) + "☆".repeat(5 - d)}</option>
+                      <option key={d} value={d}>{d} star{d > 1 ? "s" : ""}</option>
                     ))}
                   </select>
                 </div>
@@ -225,10 +301,10 @@ export default function CreateCasePage() {
             <h2 className="text-lg font-semibold text-blue-700 mb-4">Agent A — Claim</h2>
             <div className="space-y-4">
               <Input label="Agent Name" value={claimAName} onChange={(e) => setClaimAName(e.target.value)} placeholder="MerchantBot Alpha" required />
-              <Input label="Summary" value={claimASummary} onChange={(e) => setClaimASummary(e.target.value)} placeholder="Brief summary of Agent A's position" required />
+              <Input label="Summary" value={claimASummary} onChange={(e) => setClaimASummary(e.target.value)} placeholder="One-sentence position" required />
               <div>
                 <label className="block text-sm font-medium text-neutral-700 mb-1">Detailed Argument</label>
-                <textarea value={claimAArgument} onChange={(e) => setClaimAArgument(e.target.value)} placeholder="Full argument..." className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none resize-none" rows={3} required />
+                <textarea value={claimAArgument} onChange={(e) => setClaimAArgument(e.target.value)} placeholder="Full argument supporting Agent A..." className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none resize-none" rows={3} required />
               </div>
               <Input label="Requested Outcome" value={claimAOutcome} onChange={(e) => setClaimAOutcome(e.target.value)} placeholder="What does Agent A want?" required />
             </div>
@@ -239,10 +315,10 @@ export default function CreateCasePage() {
             <h2 className="text-lg font-semibold text-red-700 mb-4">Agent B — Claim</h2>
             <div className="space-y-4">
               <Input label="Agent Name" value={claimBName} onChange={(e) => setClaimBName(e.target.value)} placeholder="ConsumerGuard AI" required />
-              <Input label="Summary" value={claimBSummary} onChange={(e) => setClaimBSummary(e.target.value)} placeholder="Brief summary of Agent B's position" required />
+              <Input label="Summary" value={claimBSummary} onChange={(e) => setClaimBSummary(e.target.value)} placeholder="One-sentence position" required />
               <div>
                 <label className="block text-sm font-medium text-neutral-700 mb-1">Detailed Argument</label>
-                <textarea value={claimBArgument} onChange={(e) => setClaimBArgument(e.target.value)} placeholder="Full argument..." className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none resize-none" rows={3} required />
+                <textarea value={claimBArgument} onChange={(e) => setClaimBArgument(e.target.value)} placeholder="Full argument supporting Agent B..." className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none resize-none" rows={3} required />
               </div>
               <Input label="Requested Outcome" value={claimBOutcome} onChange={(e) => setClaimBOutcome(e.target.value)} placeholder="What does Agent B want?" required />
             </div>
@@ -250,21 +326,26 @@ export default function CreateCasePage() {
 
           {/* Evidence */}
           <Card>
-            <h2 className="text-lg font-semibold text-neutral-900 mb-4">Evidence Summary</h2>
+            <h2 className="text-lg font-semibold text-neutral-900 mb-1">Evidence Summary</h2>
+            <p className="text-xs text-neutral-400 mb-3">Optional. List any supporting evidence for the judges.</p>
             <textarea
               value={evidence}
               onChange={(e) => setEvidence(e.target.value)}
-              placeholder="Summarize any evidence relevant to this dispute..."
+              placeholder="Proof-of-delivery photo, customer statement, GPS logs..."
               className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none resize-none"
-              rows={4}
+              rows={3}
             />
           </Card>
 
-          {error && <p className="text-sm text-red-600">{error}</p>}
-          {txHash && <p className="text-xs text-green-600 font-mono">TX: {txHash}</p>}
+          {error && (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3">
+              <p className="text-sm font-medium text-red-700">Submission failed</p>
+              <p className="text-xs text-red-600 mt-0.5">{error}</p>
+            </div>
+          )}
 
-          <Button type="submit" disabled={loading} size="lg" className="w-full">
-            {loading ? "Submitting On-Chain..." : "Submit Case On-Chain"}
+          <Button type="submit" size="lg" className="w-full">
+            Submit Case On-Chain
           </Button>
         </form>
       </main>
