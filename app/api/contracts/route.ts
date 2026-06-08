@@ -5,29 +5,42 @@ import { z } from "zod";
 const requestSchema = z.object({
   private_key: z.string().optional(),
   action: z.enum([
-    // Adjudicator contract
-    "submit_case",
-    "run_judges",
-    "calculate_consensus",
-    "submit_user_decision",
-    "get_case",
-    "get_verdicts",
-    "get_consensus",
-    "get_user_decision",
-    "get_case_count",
-    // Reputation contract
-    "register_user",
-    "update_after_decision",
-    "get_reputation",
-    "get_user_count",
-    // Dispute Registry contract
-    "register_dispute",
-    "resolve_dispute",
-    "get_dispute",
-    "get_stats",
+    "submit_case", "run_judges", "calculate_consensus", "submit_user_decision",
+    "get_case", "get_verdicts", "get_consensus", "get_user_decision", "get_case_count",
+    "register_user", "update_after_decision", "get_reputation", "get_user_count",
+    "register_dispute", "resolve_dispute", "get_dispute", "get_stats",
   ]),
   params: z.record(z.unknown()).default({}),
 });
+
+// Strip BOM (U+FEFF), zero-width chars, and other invisible Unicode from strings
+function cleanStr(s: string): string {
+  let result = "";
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    // Skip: BOM, zero-width space, ZWNJ, ZWJ, replacement chars
+    if (code === 0xFEFF || code === 0xFFFE || code === 0xFFFF ||
+        code === 0x200B || code === 0x200C || code === 0x200D ||
+        code === 0x00 || code === 0xFFFD) {
+      continue;
+    }
+    result += s[i];
+  }
+  return result.trim();
+}
+
+function sanitize(val: unknown): unknown {
+  if (typeof val === "string") return cleanStr(val);
+  if (Array.isArray(val)) return val.map(sanitize);
+  if (val && typeof val === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(val as Record<string, unknown>)) {
+      out[k] = sanitize(v);
+    }
+    return out;
+  }
+  return val;
+}
 
 export async function POST(request: Request) {
   try {
@@ -42,213 +55,147 @@ export async function POST(request: Request) {
     }
 
     const { action, params, private_key } = parsed.data;
+    const p = sanitize(params) as Record<string, unknown>;
+    const key = private_key ? cleanStr(private_key) : undefined;
 
-    // Use user's wallet if private_key provided, otherwise server account
-    const { client } = private_key
-      ? getGenLayerClientForUser(private_key)
+    const { client } = key
+      ? getGenLayerClientForUser(key)
       : getGenLayerClient();
 
-    // ─── ADJUDICATOR CONTRACT ───
-    if (["submit_case", "run_judges", "calculate_consensus", "submit_user_decision", "get_case", "get_verdicts", "get_consensus", "get_user_decision", "get_case_count"].includes(action)) {
-      if (!CONTRACT_ADDRESSES.adjudicator) {
-        return NextResponse.json({ error: "Adjudicator contract not configured" }, { status: 503 });
-      }
+    // ─── ADJUDICATOR ───
+    const adjAddr = CONTRACT_ADDRESSES.adjudicator;
+    const repAddr = CONTRACT_ADDRESSES.reputation;
+    const regAddr = CONTRACT_ADDRESSES.disputeRegistry;
 
-      // WRITE methods
-      if (action === "submit_case") {
-        const hash = await client.writeContract({
-          address: CONTRACT_ADDRESSES.adjudicator,
-          functionName: "submit_case",
-          args: [
-            params.case_id as string,
-            params.title as string,
-            params.description as string,
-            params.category as string,
-            params.difficulty as number,
-            params.claim_a_name as string,
-            params.claim_a_summary as string,
-            params.claim_a_argument as string,
-            params.claim_b_name as string,
-            params.claim_b_summary as string,
-            params.claim_b_argument as string,
-            params.evidence_summary as string,
-          ],
-        });
-        return NextResponse.json({ tx_hash: hash, status: "submitted" });
-      }
-
-      if (action === "run_judges") {
-        const hash = await client.writeContract({
-          address: CONTRACT_ADDRESSES.adjudicator,
-          functionName: "run_judges",
-          args: [params.case_id as string],
-        });
-        return NextResponse.json({ tx_hash: hash, status: "judges_running" });
-      }
-
-      if (action === "calculate_consensus") {
-        const hash = await client.writeContract({
-          address: CONTRACT_ADDRESSES.adjudicator,
-          functionName: "calculate_consensus",
-          args: [params.case_id as string],
-        });
-        return NextResponse.json({ tx_hash: hash, status: "consensus_calculating" });
-      }
-
-      if (action === "submit_user_decision") {
-        const hash = await client.writeContract({
-          address: CONTRACT_ADDRESSES.adjudicator,
-          functionName: "submit_user_decision",
-          args: [
-            params.case_id as string,
-            params.user_address as string,
-            params.decision as string,
-            params.reasoning as string,
-          ],
-        });
-        return NextResponse.json({ tx_hash: hash, status: "decision_submitted" });
-      }
-
-      // READ methods
-      if (action === "get_case") {
-        const result = await client.readContract({
-          address: CONTRACT_ADDRESSES.adjudicator,
-          functionName: "get_case",
-          args: [params.case_id as string],
-        });
-        return NextResponse.json({ result });
-      }
-
-      if (action === "get_verdicts") {
-        const result = await client.readContract({
-          address: CONTRACT_ADDRESSES.adjudicator,
-          functionName: "get_verdicts",
-          args: [params.case_id as string],
-        });
-        return NextResponse.json({ result });
-      }
-
-      if (action === "get_consensus") {
-        const result = await client.readContract({
-          address: CONTRACT_ADDRESSES.adjudicator,
-          functionName: "get_consensus",
-          args: [params.case_id as string],
-        });
-        return NextResponse.json({ result });
-      }
-
-      if (action === "get_user_decision") {
-        const result = await client.readContract({
-          address: CONTRACT_ADDRESSES.adjudicator,
-          functionName: "get_user_decision",
-          args: [params.case_id as string, params.user_address as string],
-        });
-        return NextResponse.json({ result });
-      }
-
-      if (action === "get_case_count") {
-        const result = await client.readContract({
-          address: CONTRACT_ADDRESSES.adjudicator,
-          functionName: "get_case_count",
-          args: [],
-        });
-        return NextResponse.json({ result });
-      }
+    if (action === "submit_case") {
+      if (!adjAddr) return NextResponse.json({ error: "Adjudicator not configured" }, { status: 503 });
+      const hash = await client.writeContract({
+        address: adjAddr,
+        functionName: "submit_case",
+        args: [
+          p.case_id as string, p.title as string, p.description as string,
+          p.category as string, p.difficulty as number,
+          p.claim_a_name as string, p.claim_a_summary as string, p.claim_a_argument as string,
+          p.claim_b_name as string, p.claim_b_summary as string, p.claim_b_argument as string,
+          p.evidence_summary as string,
+        ],
+      });
+      return NextResponse.json({ tx_hash: hash, status: "submitted" });
     }
 
-    // ─── REPUTATION CONTRACT ───
-    if (["register_user", "update_after_decision", "get_reputation", "get_user_count"].includes(action)) {
-      if (!CONTRACT_ADDRESSES.reputation) {
-        return NextResponse.json({ error: "Reputation contract not configured" }, { status: 503 });
-      }
-
-      if (action === "register_user") {
-        const hash = await client.writeContract({
-          address: CONTRACT_ADDRESSES.reputation,
-          functionName: "register_user",
-          args: [params.user_address as string, params.username as string],
-        });
-        return NextResponse.json({ tx_hash: hash, status: "user_registered" });
-      }
-
-      if (action === "update_after_decision") {
-        const hash = await client.writeContract({
-          address: CONTRACT_ADDRESSES.reputation,
-          functionName: "update_after_decision",
-          args: [params.user_address as string, params.is_correct as boolean],
-        });
-        return NextResponse.json({ tx_hash: hash, status: "reputation_updated" });
-      }
-
-      if (action === "get_reputation") {
-        const result = await client.readContract({
-          address: CONTRACT_ADDRESSES.reputation,
-          functionName: "get_reputation",
-          args: [params.user_address as string],
-        });
-        return NextResponse.json({ result });
-      }
-
-      if (action === "get_user_count") {
-        const result = await client.readContract({
-          address: CONTRACT_ADDRESSES.reputation,
-          functionName: "get_user_count",
-          args: [],
-        });
-        return NextResponse.json({ result });
-      }
+    if (action === "run_judges") {
+      if (!adjAddr) return NextResponse.json({ error: "Adjudicator not configured" }, { status: 503 });
+      const hash = await client.writeContract({
+        address: adjAddr, functionName: "run_judges", args: [p.case_id as string],
+      });
+      return NextResponse.json({ tx_hash: hash, status: "judges_running" });
     }
 
-    // ─── DISPUTE REGISTRY CONTRACT ───
-    if (["register_dispute", "resolve_dispute", "get_dispute", "get_stats"].includes(action)) {
-      if (!CONTRACT_ADDRESSES.disputeRegistry) {
-        return NextResponse.json({ error: "DisputeRegistry contract not configured" }, { status: 503 });
-      }
+    if (action === "calculate_consensus") {
+      if (!adjAddr) return NextResponse.json({ error: "Adjudicator not configured" }, { status: 503 });
+      const hash = await client.writeContract({
+        address: adjAddr, functionName: "calculate_consensus", args: [p.case_id as string],
+      });
+      return NextResponse.json({ tx_hash: hash, status: "consensus_calculating" });
+    }
 
-      if (action === "register_dispute") {
-        const hash = await client.writeContract({
-          address: CONTRACT_ADDRESSES.disputeRegistry,
-          functionName: "register_dispute",
-          args: [
-            params.dispute_id as string,
-            params.title as string,
-            params.category as string,
-            params.submitter_address as string,
-          ],
-        });
-        return NextResponse.json({ tx_hash: hash, status: "dispute_registered" });
-      }
+    if (action === "submit_user_decision") {
+      if (!adjAddr) return NextResponse.json({ error: "Adjudicator not configured" }, { status: 503 });
+      const hash = await client.writeContract({
+        address: adjAddr, functionName: "submit_user_decision",
+        args: [p.case_id as string, p.user_address as string, p.decision as string, p.reasoning as string],
+      });
+      return NextResponse.json({ tx_hash: hash, status: "decision_submitted" });
+    }
 
-      if (action === "resolve_dispute") {
-        const hash = await client.writeContract({
-          address: CONTRACT_ADDRESSES.disputeRegistry,
-          functionName: "resolve_dispute",
-          args: [
-            params.dispute_id as string,
-            params.verdict as string,
-            params.confidence as number,
-          ],
-        });
-        return NextResponse.json({ tx_hash: hash, status: "dispute_resolved" });
-      }
+    if (action === "get_case") {
+      if (!adjAddr) return NextResponse.json({ error: "Adjudicator not configured" }, { status: 503 });
+      const result = await client.readContract({ address: adjAddr, functionName: "get_case", args: [p.case_id as string] });
+      return NextResponse.json({ result });
+    }
 
-      if (action === "get_dispute") {
-        const result = await client.readContract({
-          address: CONTRACT_ADDRESSES.disputeRegistry,
-          functionName: "get_dispute",
-          args: [params.dispute_id as string],
-        });
-        return NextResponse.json({ result });
-      }
+    if (action === "get_verdicts") {
+      if (!adjAddr) return NextResponse.json({ error: "Adjudicator not configured" }, { status: 503 });
+      const result = await client.readContract({ address: adjAddr, functionName: "get_verdicts", args: [p.case_id as string] });
+      return NextResponse.json({ result });
+    }
 
-      if (action === "get_stats") {
-        const result = await client.readContract({
-          address: CONTRACT_ADDRESSES.disputeRegistry,
-          functionName: "get_stats",
-          args: [],
-        });
-        return NextResponse.json({ result });
-      }
+    if (action === "get_consensus") {
+      if (!adjAddr) return NextResponse.json({ error: "Adjudicator not configured" }, { status: 503 });
+      const result = await client.readContract({ address: adjAddr, functionName: "get_consensus", args: [p.case_id as string] });
+      return NextResponse.json({ result });
+    }
+
+    if (action === "get_user_decision") {
+      if (!adjAddr) return NextResponse.json({ error: "Adjudicator not configured" }, { status: 503 });
+      const result = await client.readContract({ address: adjAddr, functionName: "get_user_decision", args: [p.case_id as string, p.user_address as string] });
+      return NextResponse.json({ result });
+    }
+
+    if (action === "get_case_count") {
+      if (!adjAddr) return NextResponse.json({ error: "Adjudicator not configured" }, { status: 503 });
+      const result = await client.readContract({ address: adjAddr, functionName: "get_case_count", args: [] });
+      return NextResponse.json({ result });
+    }
+
+    // ─── REPUTATION ───
+    if (action === "register_user") {
+      if (!repAddr) return NextResponse.json({ error: "Reputation not configured" }, { status: 503 });
+      const hash = await client.writeContract({
+        address: repAddr, functionName: "register_user", args: [p.user_address as string, p.username as string],
+      });
+      return NextResponse.json({ tx_hash: hash, status: "user_registered" });
+    }
+
+    if (action === "update_after_decision") {
+      if (!repAddr) return NextResponse.json({ error: "Reputation not configured" }, { status: 503 });
+      const hash = await client.writeContract({
+        address: repAddr, functionName: "update_after_decision", args: [p.user_address as string, p.is_correct as boolean],
+      });
+      return NextResponse.json({ tx_hash: hash, status: "reputation_updated" });
+    }
+
+    if (action === "get_reputation") {
+      if (!repAddr) return NextResponse.json({ error: "Reputation not configured" }, { status: 503 });
+      const result = await client.readContract({ address: repAddr, functionName: "get_reputation", args: [p.user_address as string] });
+      return NextResponse.json({ result });
+    }
+
+    if (action === "get_user_count") {
+      if (!repAddr) return NextResponse.json({ error: "Reputation not configured" }, { status: 503 });
+      const result = await client.readContract({ address: repAddr, functionName: "get_user_count", args: [] });
+      return NextResponse.json({ result });
+    }
+
+    // ─── DISPUTE REGISTRY ───
+    if (action === "register_dispute") {
+      if (!regAddr) return NextResponse.json({ error: "Registry not configured" }, { status: 503 });
+      const hash = await client.writeContract({
+        address: regAddr, functionName: "register_dispute",
+        args: [p.dispute_id as string, p.title as string, p.category as string, p.submitter_address as string],
+      });
+      return NextResponse.json({ tx_hash: hash, status: "dispute_registered" });
+    }
+
+    if (action === "resolve_dispute") {
+      if (!regAddr) return NextResponse.json({ error: "Registry not configured" }, { status: 503 });
+      const hash = await client.writeContract({
+        address: regAddr, functionName: "resolve_dispute",
+        args: [p.dispute_id as string, p.verdict as string, p.confidence as number],
+      });
+      return NextResponse.json({ tx_hash: hash, status: "dispute_resolved" });
+    }
+
+    if (action === "get_dispute") {
+      if (!regAddr) return NextResponse.json({ error: "Registry not configured" }, { status: 503 });
+      const result = await client.readContract({ address: regAddr, functionName: "get_dispute", args: [p.dispute_id as string] });
+      return NextResponse.json({ result });
+    }
+
+    if (action === "get_stats") {
+      if (!regAddr) return NextResponse.json({ error: "Registry not configured" }, { status: 503 });
+      const result = await client.readContract({ address: regAddr, functionName: "get_stats", args: [] });
+      return NextResponse.json({ result });
     }
 
     return NextResponse.json({ error: "Unknown action" }, { status: 400 });
