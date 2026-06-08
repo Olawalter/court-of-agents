@@ -1,9 +1,12 @@
 import { createClient, createAccount, generatePrivateKey, chains } from "genlayer-js";
 
+// Strip BOM (U+FEFF) and other invisible prefix characters from env vars
+const stripBOM = (s: string | undefined): string => (s ?? "").replace(/^[﻿￾]+/, "");
+
 export const CONTRACT_ADDRESSES = {
-  adjudicator: (process.env.NEXT_PUBLIC_ADJUDICATOR_CONTRACT_ADDRESS || "") as `0x${string}`,
-  reputation: (process.env.NEXT_PUBLIC_REPUTATION_CONTRACT_ADDRESS || "") as `0x${string}`,
-  disputeRegistry: (process.env.NEXT_PUBLIC_DISPUTE_REGISTRY_CONTRACT_ADDRESS || "") as `0x${string}`,
+  adjudicator: stripBOM(process.env.NEXT_PUBLIC_ADJUDICATOR_CONTRACT_ADDRESS) as `0x${string}`,
+  reputation: stripBOM(process.env.NEXT_PUBLIC_REPUTATION_CONTRACT_ADDRESS) as `0x${string}`,
+  disputeRegistry: stripBOM(process.env.NEXT_PUBLIC_DISPUTE_REGISTRY_CONTRACT_ADDRESS) as `0x${string}`,
 };
 
 /**
@@ -11,8 +14,9 @@ export const CONTRACT_ADDRESSES = {
  * Uses GENLAYER_PRIVATE_KEY if set, otherwise generates ephemeral account.
  */
 export function getGenLayerClient() {
-  const privateKey = process.env.GENLAYER_PRIVATE_KEY || undefined;
-  const account = privateKey ? createAccount(privateKey) : createAccount();
+  const rawKey = stripBOM(process.env.GENLAYER_PRIVATE_KEY);
+  const privateKey = rawKey || undefined;
+  const account = privateKey ? createAccount(privateKey as `0x${string}`) : createAccount();
   const client = createClient({
     chain: chains.studionet,
     account,

@@ -1,12 +1,15 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
+// Strip BOM (U+FEFF) and other invisible prefix characters that break HTTP header validation
+const stripBOM = (s: string | undefined): string => (s ?? "").replace(/^[﻿￾]+/, "");
+
 export async function updateSession(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });
 
   const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    stripBOM(process.env.NEXT_PUBLIC_SUPABASE_URL),
+    stripBOM(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY),
     {
       cookies: {
         getAll() {
