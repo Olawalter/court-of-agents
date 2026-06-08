@@ -258,6 +258,8 @@ export async function POST(request: Request) {
     const stack = err instanceof Error ? err.stack : undefined;
     console.error("[contracts] Error:", message);
     if (stack) console.error("[contracts] Stack:", stack);
-    return NextResponse.json({ error: message }, { status: 500 });
+    // Include first 6 stack frames in response to identify the exact throw site
+    const stackLines = stack?.split("\n").slice(0, 6).join(" | ") ?? "";
+    return NextResponse.json({ error: message, _stack: stackLines }, { status: 500 });
   }
 }
