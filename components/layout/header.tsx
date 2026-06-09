@@ -109,7 +109,7 @@ export function Header() {
           ) : (
             <Link
               href="/login"
-              className="inline-flex h-9 items-center rounded-lg bg-brand-600 px-4 text-sm font-medium text-white hover:bg-brand-700 transition-colors"
+              className="inline-flex h-8 items-center rounded-md bg-brand-600 px-3.5 text-sm font-medium text-white hover:bg-brand-700 transition-colors"
             >
               Connect Wallet
             </Link>
