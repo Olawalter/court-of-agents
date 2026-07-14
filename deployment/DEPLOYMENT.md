@@ -32,10 +32,8 @@ $env:GENLAYER_PRIVATE_KEY = "your-private-key"
 node scripts/deploy-contracts.mjs
 ```
 
-Save the output contract addresses to `.env.local`:
-- `NEXT_PUBLIC_ADJUDICATOR_CONTRACT_ADDRESS`
-- `NEXT_PUBLIC_REPUTATION_CONTRACT_ADDRESS`
-- `NEXT_PUBLIC_DISPUTE_REGISTRY_CONTRACT_ADDRESS`
+Save the output contract address to `.env.local`:
+- `NEXT_PUBLIC_COURT_CONTRACT_ADDRESS`
 
 ---
 
@@ -73,9 +71,7 @@ In Vercel Dashboard > Settings > Environment Variables, add:
 | `NEXT_PUBLIC_GENLAYER_RPC_URL` | `https://studio.genlayer.com/api` |
 | `NEXT_PUBLIC_GENLAYER_CHAIN_ID` | `61999` |
 | `GENLAYER_PRIVATE_KEY` | Your GenLayer private key |
-| `NEXT_PUBLIC_ADJUDICATOR_CONTRACT_ADDRESS` | From deploy output |
-| `NEXT_PUBLIC_REPUTATION_CONTRACT_ADDRESS` | From deploy output |
-| `NEXT_PUBLIC_DISPUTE_REGISTRY_CONTRACT_ADDRESS` | From deploy output |
+| `NEXT_PUBLIC_COURT_CONTRACT_ADDRESS` | From deploy output |
 
 ### 2.5 Redeploy
 

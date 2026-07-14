@@ -8,6 +8,8 @@ import { RunJudgesButton } from "@/features/cases/components/run-judges-button";
 import { SubmitOnChainButton } from "@/features/contracts/components/submit-onchain-button";
 import { SubmitDecision } from "@/features/cases/components/submit-decision";
 
+export const dynamic = "force-dynamic";
+
 const statusVariants: Record<string, "default" | "info" | "warning" | "success" | "danger"> = {
   pending: "default",
   in_review: "info",

@@ -11,6 +11,8 @@ const rankDisplay: Record<string, { label: string; color: string }> = {
   grand_adjudicator: { label: "Grand Adjudicator", color: "bg-amber-100 text-amber-800" },
 };
 
+export const dynamic = "force-dynamic";
+
 export default async function LeaderboardPage() {
   const supabase = createSupabaseAdmin();
 

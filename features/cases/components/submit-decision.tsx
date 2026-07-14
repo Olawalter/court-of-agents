@@ -102,15 +102,21 @@ export function SubmitDecision({ caseId, hasConsensus }: SubmitDecisionProps) {
           What is your decision on this case?
         </CardTitle>
         <p className="text-xs text-neutral-500 mb-4">
-          Your decision will be submitted on-chain from wallet {address.slice(0, 6)}...{address.slice(-4)}
+          Your decision will be submitted on-chain from wallet{" "}
+          <span aria-label={`wallet address ${address}`}>
+            {address.slice(0, 6)}...{address.slice(-4)}
+          </span>
         </p>
 
-        <div className="grid gap-2 md:grid-cols-5 mb-4">
+        <div role="radiogroup" aria-label="Verdict options" className="grid gap-2 md:grid-cols-5 mb-4">
           {verdictOptions.map((opt) => (
             <button
               key={opt.value}
+              type="button"
+              role="radio"
+              aria-checked={selectedVerdict === opt.value}
               onClick={() => setSelectedVerdict(opt.value)}
-              className={`rounded-lg border-2 px-3 py-2 text-sm font-medium transition-colors ${
+              className={`rounded-lg border-2 px-3 py-2 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 ${
                 selectedVerdict === opt.value
                   ? "border-brand-500 bg-brand-50 text-brand-700 ring-2 ring-brand-200"
                   : opt.color + " text-neutral-700"
@@ -121,15 +127,24 @@ export function SubmitDecision({ caseId, hasConsensus }: SubmitDecisionProps) {
           ))}
         </div>
 
+        <label htmlFor="verdict-reasoning" className="sr-only">
+          Your reasoning
+        </label>
         <textarea
+          id="verdict-reasoning"
           value={reasoning}
           onChange={(e) => setReasoning(e.target.value)}
           placeholder="Explain your reasoning (at least 10 characters)..."
+          aria-describedby={error ? "verdict-error" : undefined}
           className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm placeholder:text-neutral-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20 resize-none"
           rows={3}
         />
 
-        {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+        {error && (
+          <p id="verdict-error" role="alert" className="mt-2 text-sm text-red-600">
+            {error}
+          </p>
+        )}
 
         <div className="mt-4 flex justify-end">
           <Button onClick={handleSubmit} disabled={loading || !selectedVerdict}>

@@ -8,10 +8,17 @@ const stripBOM = (s: string | undefined): string => {
   return str;
 };
 
+// All adjudication, reputation, and dispute-audit logic now lives in a single
+// merged contract (intelligent-contracts/court_of_agents/contract.py), so
+// every action below resolves to the same address. The three keys are kept
+// so existing call sites (which pass `adjudicator`/`reputation`/`disputeRegistry`)
+// don't need to change.
+const COURT_ADDRESS = stripBOM(process.env.NEXT_PUBLIC_COURT_CONTRACT_ADDRESS) as `0x${string}`;
+
 export const CONTRACT_ADDRESSES = {
-  adjudicator: stripBOM(process.env.NEXT_PUBLIC_ADJUDICATOR_CONTRACT_ADDRESS) as `0x${string}`,
-  reputation: stripBOM(process.env.NEXT_PUBLIC_REPUTATION_CONTRACT_ADDRESS) as `0x${string}`,
-  disputeRegistry: stripBOM(process.env.NEXT_PUBLIC_DISPUTE_REGISTRY_CONTRACT_ADDRESS) as `0x${string}`,
+  adjudicator: COURT_ADDRESS,
+  reputation: COURT_ADDRESS,
+  disputeRegistry: COURT_ADDRESS,
 };
 
 /**

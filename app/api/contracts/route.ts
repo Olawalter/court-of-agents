@@ -9,6 +9,11 @@ const requestSchema = z.object({
     "get_case", "get_verdicts", "get_consensus", "get_user_decision", "get_case_count",
     "register_user", "update_after_decision", "get_reputation", "get_user_count",
     "register_dispute", "resolve_dispute", "get_dispute", "get_stats",
+    // CourtOfAgents-only additions (merged contract capabilities that had
+    // no equivalent in the old 3-contract design)
+    "attach_web_evidence", "finalize_case", "appeal_case", "get_appeal",
+    "get_evidence_fetch", "list_case_ids", "list_appealed_case_ids",
+    "list_user_addresses", "get_valid_categories", "get_valid_verdicts",
   ]),
   params: z.record(z.unknown()).default({}),
 });
@@ -191,6 +196,74 @@ export async function POST(request: Request) {
     if (action === "get_case_count") {
       if (!adjAddr) return NextResponse.json({ error: "Adjudicator not configured" }, { status: 503 });
       const result = await client.readContract({ address: adjAddr, functionName: "get_case_count", args: [] });
+      return NextResponse.json({ result });
+    }
+
+    if (action === "attach_web_evidence") {
+      if (!adjAddr) return NextResponse.json({ error: "Contract not configured" }, { status: 503 });
+      const hash = await client.writeContract({ value: BigInt(0),
+        address: adjAddr, functionName: "attach_web_evidence",
+        args: [safeStr(p.case_id), safeStr(p.url), safeStr(p.label)],
+      });
+      return NextResponse.json({ tx_hash: hash, status: "evidence_fetch_submitted" });
+    }
+
+    if (action === "finalize_case") {
+      if (!adjAddr) return NextResponse.json({ error: "Contract not configured" }, { status: 503 });
+      const hash = await client.writeContract({ value: BigInt(0),
+        address: adjAddr, functionName: "finalize_case", args: [p.case_id as string],
+      });
+      return NextResponse.json({ tx_hash: hash, status: "case_finalized" });
+    }
+
+    if (action === "appeal_case") {
+      if (!adjAddr) return NextResponse.json({ error: "Contract not configured" }, { status: 503 });
+      const hash = await client.writeContract({ value: BigInt(0),
+        address: adjAddr, functionName: "appeal_case",
+        args: [p.case_id as string, p.appellant_address as string, safeStr(p.reason)],
+      });
+      return NextResponse.json({ tx_hash: hash, status: "case_appealed" });
+    }
+
+    if (action === "get_appeal") {
+      if (!adjAddr) return NextResponse.json({ error: "Contract not configured" }, { status: 503 });
+      const result = await client.readContract({ address: adjAddr, functionName: "get_appeal", args: [p.case_id as string] });
+      return NextResponse.json({ result });
+    }
+
+    if (action === "get_evidence_fetch") {
+      if (!adjAddr) return NextResponse.json({ error: "Contract not configured" }, { status: 503 });
+      const result = await client.readContract({ address: adjAddr, functionName: "get_evidence_fetch", args: [p.case_id as string, p.url as string] });
+      return NextResponse.json({ result });
+    }
+
+    if (action === "list_case_ids") {
+      if (!adjAddr) return NextResponse.json({ error: "Contract not configured" }, { status: 503 });
+      const result = await client.readContract({ address: adjAddr, functionName: "list_case_ids", args: [Number(p.offset) || 0, Number(p.limit) || 50] });
+      return NextResponse.json({ result });
+    }
+
+    if (action === "list_appealed_case_ids") {
+      if (!adjAddr) return NextResponse.json({ error: "Contract not configured" }, { status: 503 });
+      const result = await client.readContract({ address: adjAddr, functionName: "list_appealed_case_ids", args: [Number(p.offset) || 0, Number(p.limit) || 50] });
+      return NextResponse.json({ result });
+    }
+
+    if (action === "get_valid_categories") {
+      if (!adjAddr) return NextResponse.json({ error: "Contract not configured" }, { status: 503 });
+      const result = await client.readContract({ address: adjAddr, functionName: "get_valid_categories", args: [] });
+      return NextResponse.json({ result });
+    }
+
+    if (action === "get_valid_verdicts") {
+      if (!adjAddr) return NextResponse.json({ error: "Contract not configured" }, { status: 503 });
+      const result = await client.readContract({ address: adjAddr, functionName: "get_valid_verdicts", args: [] });
+      return NextResponse.json({ result });
+    }
+
+    if (action === "list_user_addresses") {
+      if (!repAddr) return NextResponse.json({ error: "Contract not configured" }, { status: 503 });
+      const result = await client.readContract({ address: repAddr, functionName: "list_user_addresses", args: [Number(p.offset) || 0, Number(p.limit) || 50] });
       return NextResponse.json({ result });
     }
 

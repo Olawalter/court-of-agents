@@ -32,7 +32,7 @@ export function SubmitOnChainButton({
     return (
       <div className="flex items-center gap-2 text-sm text-green-600">
         <span className="h-2 w-2 rounded-full bg-green-500" />
-        Recorded on-chain
+        Finalized on-chain
       </div>
     );
   }
@@ -42,26 +42,23 @@ export function SubmitOnChainButton({
     setError("");
 
     try {
-      // Register dispute on-chain
+      // Case submission (submit_case) and dispute-audit-log resolution
+      // (auto-run inside calculate_consensus) already happened on-chain
+      // earlier in the flow. The remaining lifecycle step is finalizing
+      // the case now that consensus has been reached.
       const res = await fetch("/api/contracts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          action: "submit_dispute",
+          action: "finalize_case",
           private_key: privateKey,
-          params: {
-            dispute_id: caseId,
-            title: caseTitle,
-            claim_a: claimASummary,
-            claim_b: claimBSummary,
-            evidence_summary: `Consensus verdict: ${consensusVerdict}`,
-          },
+          params: { case_id: caseId },
         }),
       });
 
       if (!res.ok) {
         const data = await res.json();
-        throw new Error(data.error || "Failed to submit on-chain");
+        throw new Error(data.error || "Failed to finalize case on-chain");
       }
 
       const data = await res.json();
@@ -85,10 +82,10 @@ export function SubmitOnChainButton({
         {loading ? (
           <span className="flex items-center gap-2">
             <span className="h-3 w-3 animate-spin rounded-full border-2 border-brand-600 border-t-transparent" />
-            Submitting to StudioNet...
+            Finalizing on StudioNet...
           </span>
         ) : (
-          "Submit On-Chain"
+          "Finalize Case On-Chain"
         )}
       </Button>
 

@@ -3,6 +3,8 @@ import { createSupabaseAdmin } from "@/services/supabase/server";
 import { Card, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 
+export const dynamic = "force-dynamic";
+
 export default async function DashboardPage() {
   const supabase = createSupabaseAdmin();
 

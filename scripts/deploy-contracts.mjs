@@ -1,7 +1,10 @@
 /**
  * Court of Agents — GenLayer Contract Deployment Script
  *
- * Deploys all 3 Intelligent Contracts to StudioNet.
+ * Deploys the single merged Intelligent Contract (CourtOfAgents) to StudioNet.
+ * This replaces the previous 3-contract deployment (Adjudicator,
+ * ReputationTracker, DisputeRegistry) — all of that logic now lives in one
+ * contract at intelligent-contracts/court_of_agents/contract.py.
  *
  * Usage:
  *   node scripts/deploy-contracts.mjs
@@ -47,25 +50,11 @@ console.log(`  Network: StudioNet (chain ID: 61999)`);
 console.log(`  Account: ${account.address}`);
 console.log();
 
-const contracts = [
-  {
-    name: "Adjudicator",
-    path: "intelligent-contracts/adjudicator/contract.py",
-    envKey: "NEXT_PUBLIC_ADJUDICATOR_CONTRACT_ADDRESS",
-  },
-  {
-    name: "ReputationTracker",
-    path: "intelligent-contracts/reputation/contract.py",
-    envKey: "NEXT_PUBLIC_REPUTATION_CONTRACT_ADDRESS",
-  },
-  {
-    name: "DisputeRegistry",
-    path: "intelligent-contracts/dispute_registry/contract.py",
-    envKey: "NEXT_PUBLIC_DISPUTE_REGISTRY_CONTRACT_ADDRESS",
-  },
-];
-
-const deployedAddresses = {};
+const CONTRACT = {
+  name: "CourtOfAgents",
+  path: "intelligent-contracts/court_of_agents/contract.py",
+  envKey: "NEXT_PUBLIC_COURT_CONTRACT_ADDRESS",
+};
 
 async function deployContract(contract) {
   console.log(`\n📄 Deploying ${contract.name}...`);
@@ -95,8 +84,6 @@ async function deployContract(contract) {
 
     const contractAddress = receipt.contract_address || receipt.result?.contract_address;
     console.log(`   ✅ ${contract.name} deployed at: ${contractAddress}`);
-
-    deployedAddresses[contract.envKey] = contractAddress;
     return contractAddress;
   } catch (error) {
     console.error(`   ❌ Failed to deploy ${contract.name}:`, error.message || error);
@@ -105,20 +92,15 @@ async function deployContract(contract) {
 }
 
 async function main() {
-  for (const contract of contracts) {
-    await deployContract(contract);
-  }
+  const address = await deployContract(CONTRACT);
 
   console.log("\n" + "=".repeat(60));
   console.log("  Deployment Summary");
   console.log("=".repeat(60));
 
-  for (const [key, address] of Object.entries(deployedAddresses)) {
-    console.log(`  ${key}=${address}`);
-  }
-
-  if (Object.keys(deployedAddresses).length > 0) {
-    console.log("\n  Add these to your .env.local file.");
+  if (address) {
+    console.log(`  ${CONTRACT.envKey}=${address}`);
+    console.log("\n  Add this to your .env.local file.");
     console.log("  Then restart the dev server.");
   }
 

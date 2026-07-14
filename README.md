@@ -68,9 +68,8 @@ court-of-agents/
 │       ├── consensus/            # Consensus calculation
 │       └── decisions/            # User verdict submission
 ├── intelligent-contracts/        # GenLayer Intelligent Contracts
-│   ├── adjudicator/contract.py   # Main contract: cases, judges, consensus
-│   ├── reputation/contract.py    # On-chain reputation tracking
-│   └── dispute_registry/contract.py  # Immutable dispute audit trail
+│   └── court_of_agents/contract.py  # Merged contract: cases, judges,
+│                                     # consensus, reputation, dispute audit log
 ├── components/                   # Reusable UI components
 ├── features/                     # Feature-sliced modules
 ├── services/                     # Supabase, GenLayer, AI services
@@ -83,23 +82,30 @@ court-of-agents/
 
 ## Intelligent Contracts
 
-### CourtAdjudicator
+### CourtOfAgents
 
-The core contract. All dispute logic flows through here.
+A single merged contract (`intelligent-contracts/court_of_agents/contract.py`)
+that replaces the previous 3-contract design — adjudication, reputation, and
+the dispute audit log all live at one address. LLM calls are wrapped in
+GenLayer's Equivalence Principle (`gl.eq_principle.prompt_comparative` /
+`prompt_non_comparative`) with deliberately lenient agreement principles so
+judge/consensus transactions finalize reliably instead of going
+`Undetermined`. It also fetches live web evidence via `gl.nondet.web.get()`.
 
 | Method | Type | Description |
 |---|---|---|
-| `submit_case()` | write | Submit a new dispute on-chain |
-| `run_judges()` | write | Run 6 AI judge personas via `gl.exec_prompt()` |
-| `calculate_consensus()` | write | Synthesize verdicts into final ruling |
-| `submit_user_decision()` | write | Record a user's verdict |
-| `get_case()` | view | Read case data |
-| `get_verdicts()` | view | Read judge verdicts |
-| `get_consensus()` | view | Read consensus result |
+| `submit_case()` | write | Submit a new dispute on-chain (auto-logs to the dispute audit log) |
+| `attach_web_evidence()` | write | Fetch a URL and attach an AI-summarized excerpt as evidence |
+| `run_judges()` | write | Run 6 AI judge personas via `gl.nondet.exec_prompt()` under `prompt_comparative` |
+| `calculate_consensus()` | write | Synthesize verdicts into a final ruling (auto-resolves the audit log entry) |
+| `submit_user_decision()` | write | Record a user's verdict; auto-updates their reputation against consensus |
+| `finalize_case()` / `appeal_case()` | write | Case lifecycle management |
+| `register_user()` / `update_after_decision()` | write | On-chain reputation (5 ranks, same thresholds as before) |
+| `get_case()` / `get_verdicts()` / `get_consensus()` | view | Read case, verdict, and consensus data |
+| `list_case_ids()` / `list_user_addresses()` | view | Paginated on-chain enumeration (new — the old design had none) |
+| `get_reputation()` / `get_dispute()` / `get_stats()` | view | Reputation and audit-log reads |
 
-### ReputationTracker
-
-Tracks user reputation on-chain with 5 ranks:
+Reputation ranks (unchanged thresholds):
 
 | Rank | Min Score | Min Cases | Min Accuracy |
 |---|---|---|---|
@@ -108,10 +114,6 @@ Tracks user reputation on-chain with 5 ranks:
 | Consensus Architect | 500 | 20 | 65% |
 | Master Adjudicator | 1,500 | 50 | 75% |
 | Grand Adjudicator | 5,000 | 100 | 85% |
-
-### DisputeRegistry
-
-Immutable audit trail of all disputes and their outcomes.
 
 ## Getting Started
 
@@ -145,9 +147,7 @@ Required variables:
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key |
 | `NEXT_PUBLIC_GENLAYER_RPC_URL` | `https://studio.genlayer.com/api` |
 | `NEXT_PUBLIC_GENLAYER_CHAIN_ID` | `61999` |
-| `NEXT_PUBLIC_ADJUDICATOR_CONTRACT_ADDRESS` | Deployed contract address |
-| `NEXT_PUBLIC_REPUTATION_CONTRACT_ADDRESS` | Deployed contract address |
-| `NEXT_PUBLIC_DISPUTE_REGISTRY_CONTRACT_ADDRESS` | Deployed contract address |
+| `NEXT_PUBLIC_COURT_CONTRACT_ADDRESS` | Deployed CourtOfAgents contract address |
 
 ### Database Setup
 

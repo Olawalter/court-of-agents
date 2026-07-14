@@ -3,6 +3,11 @@ import { createSupabaseAdmin } from "@/services/supabase/server";
 import { Header } from "@/components/layout/header";
 import { AnimatedCaseCard } from "@/features/cases/components/animated-case-card";
 
+// This page has no cookies()/headers() calls, so without this Next.js treats
+// it as static and caches the rendered HTML at build/deploy time — new or
+// cleared cases in Supabase would never show up without a fresh deploy.
+export const dynamic = "force-dynamic";
+
 export default async function CasesPage() {
   const supabase = createSupabaseAdmin();
   const { data: cases } = await supabase
@@ -32,21 +37,22 @@ export default async function CasesPage() {
         {!cases || cases.length === 0 ? (
           <p className="text-neutral-500">No cases found.</p>
         ) : (
-          <div className="grid gap-4">
+          <ul className="grid gap-4 list-none p-0 m-0" aria-label="Cases">
             {cases.map((c, index) => (
-              <AnimatedCaseCard
-                key={c.id}
-                id={c.id}
-                title={c.title}
-                description={c.description}
-                category={c.category}
-                status={c.status}
-                difficulty={c.difficulty}
-                created_at={c.created_at}
-                index={index}
-              />
+              <li key={c.id}>
+                <AnimatedCaseCard
+                  id={c.id}
+                  title={c.title}
+                  description={c.description}
+                  category={c.category}
+                  status={c.status}
+                  difficulty={c.difficulty}
+                  created_at={c.created_at}
+                  index={index}
+                />
+              </li>
             ))}
-          </div>
+          </ul>
         )}
       </main>
     </div>
