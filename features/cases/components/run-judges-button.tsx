@@ -9,6 +9,7 @@ interface RunJudgesButtonProps {
   caseId: string;
   caseStatus: string;
   hasVerdicts: boolean;
+  hasEvidence: boolean;
   isOnChain: boolean;
   caseTitle: string;
   caseDescription: string;
@@ -27,6 +28,7 @@ export function RunJudgesButton({
   caseId,
   caseStatus,
   hasVerdicts,
+  hasEvidence,
   isOnChain,
   caseTitle,
   caseDescription,
@@ -176,7 +178,11 @@ export function RunJudgesButton({
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-3 flex-wrap">
         {canRun && !hasVerdicts && (
-          <Button onClick={handleSubmitAndRunJudges} disabled={loading} size="lg">
+          <Button
+            onClick={handleSubmitAndRunJudges}
+            disabled={loading || !hasEvidence}
+            size="lg"
+          >
             {loading ? (
               <span className="flex items-center gap-2">
                 <span className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
@@ -186,6 +192,12 @@ export function RunJudgesButton({
               "Run AI Judges On-Chain"
             )}
           </Button>
+        )}
+
+        {canRun && !hasVerdicts && !hasEvidence && (
+          <p className="text-sm text-amber-600">
+            Attach at least one piece of web evidence above before judges can run.
+          </p>
         )}
 
         {hasVerdicts && caseStatus !== "consensus_reached" && caseStatus !== "finalized" && (

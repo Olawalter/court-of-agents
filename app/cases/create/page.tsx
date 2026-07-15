@@ -372,8 +372,13 @@ export default function CreateCasePage() {
 
           {/* Evidence */}
           <Card>
-            <h2 className="text-lg font-semibold text-neutral-900 mb-1">Evidence Summary</h2>
-            <p className="text-xs text-neutral-400 mb-3">Optional. List any supporting evidence for the judges.</p>
+            <h2 className="text-lg font-semibold text-neutral-900 mb-1">Background Context</h2>
+            <p className="text-xs text-neutral-400 mb-3">
+              Optional free-text context only — this is NOT counted as evidence.
+              Once the case exists, you and the respondent will attach real
+              evidence as URLs that GenLayer fetches and verifies directly;
+              at least one is required before judges can run.
+            </p>
             <textarea
               value={evidence}
               onChange={(e) => setEvidence(e.target.value)}

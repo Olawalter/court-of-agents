@@ -500,6 +500,12 @@ class CourtOfAgents(gl.Contract):
                 },
                 "claim_b": None,
                 "evidence_summary": _truncate(evidence_summary, MAX_STORED_FIELD_CHARS),
+                # Free-text context only — NOT counted as evidence. Real
+                # evidence must come from attach_web_evidence(), which
+                # actually fetches a live URL and LLM-summarizes the
+                # verified content, rather than trusting an assertion typed
+                # by a party. run_judges() requires evidence_count > 0.
+                "evidence_count": 0,
                 "status": "awaiting_response",
             },
             sort_keys=True,
@@ -626,6 +632,7 @@ class CourtOfAgents(gl.Contract):
         existing = case_data.get("evidence_summary", "")
         addition = f"\n[Web evidence from {submitted_by} — {label}] {summary_text}"
         case_data["evidence_summary"] = _truncate(existing + addition, MAX_STORED_FIELD_CHARS)
+        case_data["evidence_count"] = int(case_data.get("evidence_count", 0)) + 1
         self.cases[case_id] = json.dumps(case_data, sort_keys=True)
 
     @gl.public.write
@@ -676,6 +683,12 @@ class CourtOfAgents(gl.Contract):
         claim_b = case_data["claim_b"]
         if not claim_b:
             raise Exception(f"Case '{case_id}' has no respondent claim yet")
+        if int(case_data.get("evidence_count", 0)) == 0:
+            raise Exception(
+                f"Case '{case_id}' has no fetched evidence yet — call "
+                f"attach_web_evidence() at least once before judges can "
+                f"deliberate. Free-text claims alone are not evidence."
+            )
 
         case_context = (
             f"Title: {case_data['title']}\n"

@@ -9,6 +9,7 @@ import { SubmitOnChainButton } from "@/features/contracts/components/submit-onch
 import { SubmitDecision } from "@/features/cases/components/submit-decision";
 import { RespondToCase } from "@/features/cases/components/respond-to-case";
 import { AppealCase } from "@/features/cases/components/appeal-case";
+import { AttachEvidence } from "@/features/cases/components/attach-evidence";
 
 export const dynamic = "force-dynamic";
 
@@ -208,6 +209,19 @@ export default async function CaseDetailPage({
           claimantAddress={caseData.claimant_address || ""}
         />
 
+        {/* Evidence submission — real, fetched-and-verified evidence only.
+            Required (evidence.length > 0) before judges can run. */}
+        {claimB && (!verdicts || verdicts.length === 0) && (
+          <div className="mb-4">
+            <AttachEvidence
+              caseId={id}
+              claimantAddress={caseData.claimant_address || ""}
+              respondentAddress={caseData.respondent_address || ""}
+              hasEvidence={!!evidence && evidence.length > 0}
+            />
+          </div>
+        )}
+
         {/* Action Buttons — only meaningful once claim_b exists */}
         {claimB && (
           <div className="mb-8">
@@ -215,6 +229,7 @@ export default async function CaseDetailPage({
               caseId={id}
               caseStatus={caseData.status}
               hasVerdicts={!!verdicts && verdicts.length > 0}
+              hasEvidence={!!evidence && evidence.length > 0}
               isOnChain={!!caseData.onchain_tx_hash}
               caseTitle={caseData.title}
               caseDescription={caseData.description}
