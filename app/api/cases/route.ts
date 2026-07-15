@@ -57,8 +57,10 @@ export async function POST(request: Request) {
         category: parsed.data.category,
         difficulty: parsed.data.difficulty,
         claim_a: parsed.data.claim_a,
-        claim_b: parsed.data.claim_b,
-        status: "pending",
+        claim_b: parsed.data.claim_b ?? null,
+        claimant_address: parsed.data.claimant_address,
+        respondent_address: parsed.data.respondent_address,
+        status: "awaiting_response",
       })
       .select()
       .single();

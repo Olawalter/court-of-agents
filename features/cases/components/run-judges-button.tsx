@@ -114,6 +114,28 @@ export function RunJudgesButton({
     }
   }
 
+  // GenLayer's on-chain calculate_consensus occasionally fails during
+  // consensus (StudioNet-side crash/timeout, not something visible to this
+  // submit call — the failure happens asynchronously well after we already
+  // get a tx_hash back). This retries the on-chain call in the background,
+  // without blocking the UI: the app's actual result already comes from
+  // the always-succeeds off-chain /api/consensus sync below, so a failed
+  // on-chain retry never breaks the user-facing flow — it only affects
+  // whether the verdict also lands in GenLayer's on-chain record.
+  async function retryOnChainConsensusInBackground(maxAttempts = 2, delayMs = 20000) {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      await new Promise((r) => setTimeout(r, delayMs));
+      try {
+        const check = await callContract("get_consensus", { case_id: caseId });
+        if (check.result) return; // already landed on-chain, nothing to do
+        await callContract("calculate_consensus", { case_id: caseId });
+      } catch {
+        // Best-effort only — off-chain result is already in Supabase, so a
+        // failed background retry is not user-facing.
+      }
+    }
+  }
+
   async function handleRunConsensus() {
     setLoading(true);
     setError("");
@@ -124,7 +146,9 @@ export function RunJudgesButton({
       const result = await callContract("calculate_consensus", { case_id: caseId });
       setTxHash(result.tx_hash || "");
 
-      // Step 2: Also sync to Supabase
+      // Step 2: Also sync to Supabase — this is the source of truth the UI
+      // actually reads from, and it always succeeds independent of the
+      // on-chain transaction's eventual outcome.
       setStep("Syncing results...");
       await fetch("/api/consensus", {
         method: "POST",
@@ -134,6 +158,10 @@ export function RunJudgesButton({
 
       setStep("Done!");
       router.refresh();
+
+      // Fire-and-forget: try to get the on-chain record to succeed too,
+      // without making the user wait for it.
+      void retryOnChainConsensusInBackground();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
     } finally {

@@ -24,6 +24,23 @@ export const createCaseSchema = z.object({
     detailed_argument: z.string(),
     requested_outcome: z.string(),
   }),
+  // claim_b is filled in later by the respondent via respond_to_case() —
+  // not known at case-creation time.
+  claim_b: z
+    .object({
+      agent_name: z.string(),
+      summary: z.string(),
+      detailed_argument: z.string(),
+      requested_outcome: z.string(),
+    })
+    .nullable()
+    .optional(),
+  claimant_address: z.string(),
+  respondent_address: z.string(),
+});
+
+export const respondToCaseSchema = z.object({
+  case_id: z.string().uuid(),
   claim_b: z.object({
     agent_name: z.string(),
     summary: z.string(),
@@ -34,3 +51,4 @@ export const createCaseSchema = z.object({
 
 export type UserDecisionInput = z.infer<typeof userDecisionSchema>;
 export type CreateCaseInput = z.infer<typeof createCaseSchema>;
+export type RespondToCaseInput = z.infer<typeof respondToCaseSchema>;

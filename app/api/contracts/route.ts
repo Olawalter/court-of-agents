@@ -14,6 +14,8 @@ const requestSchema = z.object({
     "attach_web_evidence", "finalize_case", "appeal_case", "get_appeal",
     "get_evidence_fetch", "list_case_ids", "list_appealed_case_ids",
     "list_user_addresses", "get_valid_categories", "get_valid_verdicts",
+    // Two-party case lifecycle (wallet-verified respondent/appeal access)
+    "respond_to_case",
   ]),
   params: z.record(z.unknown()).default({}),
 });
@@ -122,14 +124,16 @@ export async function POST(request: Request) {
 
     if (action === "submit_case") {
       if (!adjAddr) return NextResponse.json({ error: "Adjudicator not configured" }, { status: 503 });
+      // Claim B is no longer submitted here — the case starts
+      // "awaiting_response" and only the named respondent_address can fill
+      // it in via respond_to_case().
       // safeStr() is applied here as a final guard — sanitize() already ran on params above,
       // but this ensures the exact bytes going into the SDK are Latin-1 safe.
-      const submitArgs: [string, string, string, string, number, string, string, string, string, string, string, string] = [
+      const submitArgs: [string, string, string, string, number, string, string, string, string, string] = [
         safeStr(p.case_id), safeStr(p.title), safeStr(p.description),
         safeStr(p.category), Number(p.difficulty) || 1,
         safeStr(p.claim_a_name), safeStr(p.claim_a_summary), safeStr(p.claim_a_argument),
-        safeStr(p.claim_b_name), safeStr(p.claim_b_summary), safeStr(p.claim_b_argument),
-        safeStr(p.evidence_summary),
+        safeStr(p.respondent_address), safeStr(p.evidence_summary),
       ];
       console.log("[submit_case] args char-code check:", submitArgs.map((a, i) =>
         typeof a === "string"
@@ -142,6 +146,19 @@ export async function POST(request: Request) {
         args: submitArgs,
       });
       return NextResponse.json({ tx_hash: hash, status: "submitted" });
+    }
+
+    if (action === "respond_to_case") {
+      if (!adjAddr) return NextResponse.json({ error: "Adjudicator not configured" }, { status: 503 });
+      const hash = await client.writeContract({ value: BigInt(0),
+        address: adjAddr,
+        functionName: "respond_to_case",
+        args: [
+          safeStr(p.case_id), safeStr(p.claim_b_name),
+          safeStr(p.claim_b_summary), safeStr(p.claim_b_argument),
+        ],
+      });
+      return NextResponse.json({ tx_hash: hash, status: "response_submitted" });
     }
 
     if (action === "run_judges") {
@@ -218,9 +235,12 @@ export async function POST(request: Request) {
 
     if (action === "appeal_case") {
       if (!adjAddr) return NextResponse.json({ error: "Contract not configured" }, { status: 503 });
+      // No appellant_address param anymore — the contract verifies the
+      // caller (via the signing private_key) is the claimant or respondent
+      // itself, rather than trusting a caller-supplied address.
       const hash = await client.writeContract({ value: BigInt(0),
         address: adjAddr, functionName: "appeal_case",
-        args: [p.case_id as string, p.appellant_address as string, safeStr(p.reason)],
+        args: [p.case_id as string, safeStr(p.reason), safeStr(p.new_evidence ?? "")],
       });
       return NextResponse.json({ tx_hash: hash, status: "case_appealed" });
     }

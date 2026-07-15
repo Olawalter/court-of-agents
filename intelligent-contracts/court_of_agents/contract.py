@@ -67,6 +67,7 @@ import json
 VALID_VERDICTS = ("FAVOR_A", "FAVOR_B", "PARTIAL_A", "PARTIAL_B", "DISMISS")
 
 VALID_STATUSES = (
+    "awaiting_response",
     "pending",
     "deliberating",
     "consensus_reached",
@@ -201,6 +202,53 @@ def _truncate(text, max_len):
     return text[: max_len - 3] + "..."
 
 
+def _ascii_safe(text) -> str:
+    """
+    Transliterate common typographic Unicode characters (smart quotes,
+    em/en-dashes, ellipsis, bullets) to plain ASCII equivalents and drop
+    anything else above code point 0xFF. Mirrors the frontend's
+    cleanStr()/safeStr() sanitizers in app/api/contracts/route.ts.
+
+    Why this exists: the frontend only sanitizes USER-SUPPLIED contract
+    arguments before they're ever stored. It does NOT — and can't — touch
+    text the contract itself generates via `gl.nondet.exec_prompt()` (judge
+    reasoning, consensus explanations, web-evidence summaries). LLM output
+    routinely contains smart quotes/em-dashes, and embedding that
+    unsanitized text into a SECOND `exec_prompt()` call (e.g.
+    calculate_consensus() building a prompt from run_judges()'s stored
+    reasoning) was observed on a real StudioNet deployment to crash GenVM
+    with a low-level, non-Python `INTERNAL_ERROR` deep inside the host call
+    boundary (`cpython!py_gl_call`) — reproducing identically across all 3
+    leader-rotation attempts, confirming it's the specific text content
+    triggering it, not random flakiness. Applied at the point LLM output is
+    first parsed so every downstream reuse is already safe.
+    """
+    if not isinstance(text, str):
+        return ""
+    out = []
+    for ch in text:
+        code = ord(ch)
+        if code in (0x2018, 0x2019, 0x0060, 0x00B4):
+            out.append("'")
+        elif code in (0x201C, 0x201D, 0x00AB, 0x00BB):
+            out.append('"')
+        elif code in (0x2013, 0x2014, 0x2015):
+            out.append("-")
+        elif code == 0x2026:
+            out.append("...")
+        elif code in (0x2022, 0x2023, 0x2043, 0x25CF, 0x25E6):
+            out.append("-")
+        elif code == 0x00A0:
+            out.append(" ")
+        elif code in (0xFEFF, 0xFFFE, 0xFFFF, 0x200B, 0x200C, 0x200D, 0x0000, 0xFFFD):
+            continue
+        elif code > 0xFF:
+            continue
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
 def _strip_code_fences(text):
     """LLMs frequently wrap JSON in ```json ... ``` fences. Strip them."""
     t = text.strip()
@@ -329,18 +377,31 @@ class CourtOfAgents(gl.Contract):
     """
     Court of Agents — unified adjudication, reputation, and audit contract.
 
-    Public write flow (mirrors the original 3-contract design 1:1 so the
-    frontend's existing call sequence keeps working against one address):
+    Public write flow — two-party case lifecycle with wallet-based access
+    control (gl.message.sender_address), on top of the same adjudication
+    engine as before:
 
-      1. submit_case()            -> case stored, dispute auto-logged
-      2. attach_web_evidence()    -> optional: pull live evidence from a URL
-      3. run_judges()              -> 6 LLM judge personas deliberate
-      4. calculate_consensus()     -> LLM synthesizes a final verdict,
+      1. submit_case()            -> claimant names a respondent wallet;
+                                       case starts "awaiting_response",
+                                       dispute auto-logged
+      2. respond_to_case()         -> ONLY the named respondent wallet may
+                                       call this; case moves to "pending"
+      3. attach_web_evidence()    -> optional, either party (verified by
+                                       caller address): pull live evidence
+                                       from a URL, tagged by who submitted it
+      4. run_judges()              -> either party may trigger once both
+                                       claims exist; 6 LLM judge personas
+                                       deliberate
+      5. calculate_consensus()     -> LLM synthesizes a final verdict,
                                        dispute log auto-resolved
-      5. submit_user_decision()    -> a human records their own verdict;
+      6. submit_user_decision()    -> a human records their own verdict;
                                        reputation is updated automatically
                                        by comparing it against consensus
-      6. finalize_case() / appeal_case() -> lifecycle management
+      7. finalize_case()           -> lifecycle close-out
+         appeal_case()             -> ONLY claimant or respondent; reopens
+                                       the case to "pending" with optional
+                                       new evidence for a full re-run of
+                                       steps 4-5
     """
 
     # --- Adjudicator storage -------------------------------------------------
@@ -404,14 +465,14 @@ class CourtOfAgents(gl.Contract):
         claim_a_name: str,
         claim_a_summary: str,
         claim_a_argument: str,
-        claim_b_name: str,
-        claim_b_summary: str,
-        claim_b_argument: str,
+        respondent_address: str,
         evidence_summary: str,
     ) -> None:
         """
-        Submit a new dispute case on-chain. Deterministic — no LLM or web
-        calls, so this always succeeds without any consensus risk.
+        Submit a new dispute case on-chain, naming a specific respondent
+        wallet who must call respond_to_case() before judges can run.
+        Deterministic — no LLM or web calls, so this always succeeds
+        without any consensus risk.
 
         Also writes a matching entry into the merged dispute audit log
         (formerly a separate transaction against DisputeRegistry).
@@ -421,6 +482,7 @@ class CourtOfAgents(gl.Contract):
 
         safe_category = category if category in VALID_CATEGORIES else "commerce"
         safe_difficulty = _clamp_int(difficulty, 1, 5, 3)
+        claimant_address = gl.message.sender_address.as_hex
 
         case_data = json.dumps(
             {
@@ -429,18 +491,16 @@ class CourtOfAgents(gl.Contract):
                 "description": _truncate(description, MAX_STORED_FIELD_CHARS),
                 "category": safe_category,
                 "difficulty": safe_difficulty,
+                "claimant_address": claimant_address,
+                "respondent_address": respondent_address,
                 "claim_a": {
                     "agent_name": claim_a_name,
                     "summary": _truncate(claim_a_summary, MAX_STORED_FIELD_CHARS),
                     "argument": _truncate(claim_a_argument, MAX_STORED_FIELD_CHARS),
                 },
-                "claim_b": {
-                    "agent_name": claim_b_name,
-                    "summary": _truncate(claim_b_summary, MAX_STORED_FIELD_CHARS),
-                    "argument": _truncate(claim_b_argument, MAX_STORED_FIELD_CHARS),
-                },
+                "claim_b": None,
                 "evidence_summary": _truncate(evidence_summary, MAX_STORED_FIELD_CHARS),
-                "status": "pending",
+                "status": "awaiting_response",
             },
             sort_keys=True,
         )
@@ -451,6 +511,46 @@ class CourtOfAgents(gl.Contract):
         # Auto-register in the merged audit log (previously a second
         # transaction to DisputeRegistry.register_dispute()).
         self._register_dispute(case_id, title, safe_category, claim_a_name)
+
+    @gl.public.write
+    def respond_to_case(
+        self,
+        case_id: str,
+        claim_b_name: str,
+        claim_b_summary: str,
+        claim_b_argument: str,
+    ) -> None:
+        """
+        The named respondent's counter-claim. Only the wallet address given
+        as `respondent_address` in submit_case() may call this — enforced
+        via gl.message.sender_address, GenVM's caller-identity primitive.
+        Moves the case from awaiting_response -> pending, which is what
+        unblocks run_judges().
+        """
+        case_raw = self.cases.get(case_id, "")
+        if not case_raw:
+            raise Exception(f"Case '{case_id}' not found")
+
+        case_data = json.loads(case_raw)
+        if case_data.get("status") != "awaiting_response":
+            raise Exception(
+                f"Case '{case_id}' is not awaiting a response "
+                f"(status: {case_data.get('status')})"
+            )
+
+        expected_respondent = Address(case_data["respondent_address"])
+        if expected_respondent != gl.message.sender_address:
+            raise Exception(
+                "Only the named respondent wallet may respond to this case"
+            )
+
+        case_data["claim_b"] = {
+            "agent_name": claim_b_name,
+            "summary": _truncate(claim_b_summary, MAX_STORED_FIELD_CHARS),
+            "argument": _truncate(claim_b_argument, MAX_STORED_FIELD_CHARS),
+        }
+        case_data["status"] = "pending"
+        self.cases[case_id] = json.dumps(case_data, sort_keys=True)
 
     @gl.public.write
     def attach_web_evidence(self, case_id: str, url: str, label: str) -> None:
@@ -466,6 +566,18 @@ class CourtOfAgents(gl.Contract):
         case_raw = self.cases.get(case_id, "")
         if not case_raw:
             raise Exception(f"Case '{case_id}' not found")
+
+        case_data_precheck = json.loads(case_raw)
+        caller = gl.message.sender_address
+        claimant = Address(case_data_precheck["claimant_address"])
+        submitted_by = "claimant" if caller == claimant else "respondent"
+        if submitted_by == "respondent":
+            respondent_addr = case_data_precheck.get("respondent_address")
+            if not respondent_addr or caller != Address(respondent_addr):
+                raise Exception(
+                    "Only the claimant or the named respondent may attach "
+                    "evidence to this case"
+                )
 
         def fetch_page_text() -> str:
             response = gl.nondet.web.get(url)
@@ -489,7 +601,10 @@ class CourtOfAgents(gl.Contract):
             """,
         )
 
-        summary_text = _truncate(str(summary).strip(), MAX_STORED_FIELD_CHARS)
+        # _ascii_safe(): this summary gets folded back into evidence_summary
+        # below, which run_judges() later embeds into a second exec_prompt()
+        # call — same GenVM crash risk as calculate_consensus, see _ascii_safe().
+        summary_text = _ascii_safe(_truncate(str(summary).strip(), MAX_STORED_FIELD_CHARS))
 
         fetch_record = json.dumps(
             {
@@ -497,17 +612,19 @@ class CourtOfAgents(gl.Contract):
                 "url": _truncate(url, 500),
                 "label": _truncate(label, 200),
                 "summary": summary_text,
+                "submitted_by": submitted_by,
             },
             sort_keys=True,
         )
         fetch_key = f"{case_id}:{url}"
         self.evidence_fetches[fetch_key] = fetch_record
 
-        # Fold the summary into the case's evidence_summary field so judges
-        # see it automatically during run_judges().
-        case_data = json.loads(case_raw)
+        # Re-read case_data (fetch_record above used the pre-nondet-call
+        # snapshot for the access check; storage may only be mutated here,
+        # after the nondet call has returned, per GenVM's rules).
+        case_data = json.loads(self.cases[case_id])
         existing = case_data.get("evidence_summary", "")
-        addition = f"\n[Web evidence — {label}] {summary_text}"
+        addition = f"\n[Web evidence from {submitted_by} — {label}] {summary_text}"
         case_data["evidence_summary"] = _truncate(existing + addition, MAX_STORED_FIELD_CHARS)
         self.cases[case_id] = json.dumps(case_data, sort_keys=True)
 
@@ -550,8 +667,15 @@ class CourtOfAgents(gl.Contract):
             raise Exception(f"Case '{case_id}' not found")
 
         case_data = json.loads(case_raw)
+        if case_data.get("status") == "awaiting_response":
+            raise Exception(
+                f"Case '{case_id}' is still awaiting the respondent's "
+                f"counter-claim — call respond_to_case() first"
+            )
         claim_a = case_data["claim_a"]
         claim_b = case_data["claim_b"]
+        if not claim_b:
+            raise Exception(f"Case '{case_id}' has no respondent claim yet")
 
         case_context = (
             f"Title: {case_data['title']}\n"
@@ -618,11 +742,11 @@ class CourtOfAgents(gl.Contract):
             entry = by_persona.get(persona, {})
             verdict = _normalize_verdict(entry.get("verdict"))
             confidence = _clamp_int(entry.get("confidence"), 0, 100, 50)
-            reasoning = _truncate(entry.get("reasoning", "No reasoning provided."), 1000)
+            reasoning = _ascii_safe(_truncate(entry.get("reasoning", "No reasoning provided."), 1000))
             key_factors = entry.get("key_factors")
             if not isinstance(key_factors, list):
                 key_factors = []
-            key_factors = [_truncate(str(f), 200) for f in key_factors[:5]]
+            key_factors = [_ascii_safe(_truncate(str(f), 200)) for f in key_factors[:5]]
 
             results.append(
                 {
@@ -698,6 +822,119 @@ class CourtOfAgents(gl.Contract):
 
         return gl.vm.run_nondet_unsafe(leader_fn, validator_fn)
 
+    def _build_consensus_prompt(self, verdicts: list) -> str:
+        verdict_summary = ""
+        for v in verdicts:
+            # Reasoning capped much shorter here (300 chars) than its
+            # 1000-char storage limit — the consensus synthesis only needs
+            # the gist of each judge's reasoning, not the full text.
+            # _ascii_safe() re-applied (belt-and-suspenders): verdicts are
+            # already sanitized when first parsed in _parse_panel_response,
+            # but re-sanitizing protects against stale data written by an
+            # older contract version that predates that fix.
+            verdict_summary += (
+                f"\n{v.get('persona', 'unknown').upper()} JUDGE: "
+                f"verdict={v.get('verdict')}, confidence={v.get('confidence')}, "
+                f"reasoning={_ascii_safe(_truncate(str(v.get('reasoning', '')), 300))}\n"
+            )
+        # Hard cap on the summary (not the assembled prompt) so the
+        # JSON-schema instructions appended after it are never cut off.
+        verdict_summary = _truncate(verdict_summary, 3000)
+
+        return (
+            f"You are the Final Consensus Engine for the Court of Agents.\n\n"
+            f"Six AI judges have evaluated a dispute. Their verdicts are below.\n\n"
+            f"JUDGE VERDICTS:\n{verdict_summary}\n\n"
+            f"Synthesize these verdicts into a final consensus decision.\n\n"
+            f"Respond with ONLY a JSON object containing:\n"
+            f"- final_verdict: one of FAVOR_A, FAVOR_B, PARTIAL_A, PARTIAL_B, DISMISS\n"
+            f"- overall_confidence: integer 0-100\n"
+            f"- agreement_ratio: float 0-1 representing how much judges agreed\n"
+            f"- method: one of UNANIMOUS, SUPERMAJORITY, WEIGHTED_MAJORITY\n"
+            f"- resolution_explanation: a 3-4 sentence explanation of the final decision\n"
+            f"- dissenting_summary: brief summary of any dissenting opinions"
+        )
+
+    def _parse_consensus_response(self, raw_text) -> dict:
+        """
+        Deterministic parsing/normalization of a consensus-synthesis LLM
+        response into a fixed-shape dict. Called identically by the leader
+        and by every validator, mirroring `_parse_panel_response`'s pattern
+        exactly (a bound method, not a sibling nested closure) — an earlier
+        version of this method used a locally-defined nested function
+        instead of a bound method and reliably crashed GenVM with a
+        low-level, non-Python INTERNAL_ERROR at the exec_prompt host-call
+        boundary (processing_time: 0, i.e. instantly, before any model
+        inference even started) on every real StudioNet deployment tested,
+        while run_judges()'s bound-method pattern never crashed once.
+        Neither response size nor Unicode content explained the crash
+        (both were fixed independently and it persisted identically), so
+        this structural fix — matching the one known-reliable pattern
+        exactly — is the current best fix.
+        """
+        parsed = _parse_json_loose(raw_text)
+        # agreement_ratio is stored/compared as an int PERCENTAGE (0-100),
+        # not a float — GenVM's calldata encoder cannot encode native Python
+        # floats when a nondet leader_fn's return value crosses the
+        # host/guest boundary for validator comparison (confirmed via a
+        # real StudioNet crash: "TypeError: not calldata encodable 1.0:
+        # float key 'agreement_ratio'"). This was the actual root cause of
+        # every calculate_consensus crash — not Unicode content, not prompt
+        # size, not closure structure (all three were tried and ruled out
+        # first). int is calldata-safe; float is not.
+        raw_ratio = _clamp_float(parsed.get("agreement_ratio"), 0.0, 1.0, 0.5)
+        return {
+            "final_verdict": _normalize_verdict(parsed.get("final_verdict")),
+            "overall_confidence": _clamp_int(parsed.get("overall_confidence"), 0, 100, 50),
+            "agreement_ratio_pct": _clamp_int(round(raw_ratio * 100), 0, 100, 50),
+            "method": parsed.get("method")
+            if parsed.get("method") in ("UNANIMOUS", "SUPERMAJORITY", "WEIGHTED_MAJORITY")
+            else "WEIGHTED_MAJORITY",
+            "resolution_explanation": _ascii_safe(_truncate(
+                parsed.get("resolution_explanation", "No explanation provided."), 1500
+            )),
+            "dissenting_summary": _ascii_safe(_truncate(parsed.get("dissenting_summary", ""), 800)),
+        }
+
+    def _consensus_equivalent(self, leader_data: dict, validator_data: dict) -> bool:
+        """
+        Deterministic acceptance rule for consensus synthesis — same
+        tolerance bands as before (40-point confidence, 50-point agreement
+        tolerance out of 100, verdict-adjacency check), just extracted into
+        a bound method to match `_panel_equivalent`'s pattern.
+        """
+        if not self._verdicts_adjacent(
+            leader_data["final_verdict"], validator_data["final_verdict"]
+        ):
+            return False
+        if abs(leader_data["overall_confidence"] - validator_data["overall_confidence"]) > 40:
+            return False
+        if abs(leader_data["agreement_ratio_pct"] - validator_data["agreement_ratio_pct"]) > 50:
+            return False
+        return True
+
+    def _synthesize_consensus(self, verdicts: list) -> dict:
+        """
+        Runs the consensus-synthesis LLM call through a deterministic
+        Python validator, structurally identical to `_run_judge_panel` —
+        see `_parse_consensus_response`'s docstring for why this structural
+        match matters.
+        """
+        prompt = self._build_consensus_prompt(verdicts)
+
+        def leader_fn():
+            raw = gl.nondet.exec_prompt(prompt, response_format="json")
+            return self._parse_consensus_response(raw)
+
+        def validator_fn(leader_result) -> bool:
+            if not isinstance(leader_result, gl.vm.Return):
+                return False
+            validator_data = leader_fn()
+            leader_data = leader_result.calldata
+            return self._consensus_equivalent(leader_data, validator_data)
+
+        return gl.vm.run_nondet_unsafe(leader_fn, validator_fn)
+
     @gl.public.write
     def calculate_consensus(self, case_id: str) -> None:
         """
@@ -720,78 +957,21 @@ class CourtOfAgents(gl.Contract):
 
         verdicts = json.loads(verdicts_raw)
 
-        verdict_summary = ""
-        for v in verdicts:
-            verdict_summary += (
-                f"\n{v.get('persona', 'unknown').upper()} JUDGE: "
-                f"verdict={v.get('verdict')}, confidence={v.get('confidence')}, "
-                f"reasoning={v.get('reasoning')}\n"
-            )
-
-        prompt = (
-            f"You are the Final Consensus Engine for the Court of Agents.\n\n"
-            f"Six AI judges have evaluated a dispute. Their verdicts are below.\n\n"
-            f"JUDGE VERDICTS:\n{verdict_summary}\n\n"
-            f"Synthesize these verdicts into a final consensus decision.\n\n"
-            f"Respond with ONLY a JSON object containing:\n"
-            f"- final_verdict: one of FAVOR_A, FAVOR_B, PARTIAL_A, PARTIAL_B, DISMISS\n"
-            f"- overall_confidence: integer 0-100\n"
-            f"- agreement_ratio: float 0-1 representing how much judges agreed\n"
-            f"- method: one of UNANIMOUS, SUPERMAJORITY, WEIGHTED_MAJORITY\n"
-            f"- resolution_explanation: a 3-4 sentence explanation of the final decision\n"
-            f"- dissenting_summary: brief summary of any dissenting opinions"
-        )
-
-        def parse_consensus(raw_text) -> dict:
-            """Deterministic parsing step — identical for leader and every validator."""
-            parsed = _parse_json_loose(raw_text)
-            return {
-                "final_verdict": _normalize_verdict(parsed.get("final_verdict")),
-                "overall_confidence": _clamp_int(parsed.get("overall_confidence"), 0, 100, 50),
-                "agreement_ratio": _clamp_float(parsed.get("agreement_ratio"), 0.0, 1.0, 0.5),
-                "method": parsed.get("method")
-                if parsed.get("method") in ("UNANIMOUS", "SUPERMAJORITY", "WEIGHTED_MAJORITY")
-                else "WEIGHTED_MAJORITY",
-                "resolution_explanation": _truncate(
-                    parsed.get("resolution_explanation", "No explanation provided."), 1500
-                ),
-                "dissenting_summary": _truncate(parsed.get("dissenting_summary", ""), 800),
-            }
-
-        def leader_fn():
-            raw = gl.nondet.exec_prompt(prompt, response_format="json")
-            return parse_consensus(raw)
-
-        def validator_fn(leader_result) -> bool:
-            # Deterministic Python comparator instead of an LLM-judged
-            # Equivalence Principle wrapper — see the design history note
-            # on run_judges() for why this is more reliable in practice.
-            if not isinstance(leader_result, gl.vm.Return):
-                return False
-            validator_data = leader_fn()
-            leader_data = leader_result.calldata
-            # Loosened from the original 20/25-point and 0.25/0.3 tolerance
-            # bands after real StudioNet testing showed unanimity-style
-            # thresholds reliably triggering leader rotation -> Undetermined.
-            if not self._verdicts_adjacent(
-                leader_data["final_verdict"], validator_data["final_verdict"]
-            ):
-                return False
-            if abs(leader_data["overall_confidence"] - validator_data["overall_confidence"]) > 40:
-                return False
-            if abs(leader_data["agreement_ratio"] - validator_data["agreement_ratio"]) > 0.5:
-                return False
-            return True
-
-        parsed = gl.vm.run_nondet_unsafe(leader_fn, validator_fn)
+        parsed = self._synthesize_consensus(verdicts)
         final_verdict = parsed["final_verdict"]
         overall_confidence = parsed["overall_confidence"]
 
+        # Converting back to a 0.0-1.0 float here (outside the nondet call,
+        # in plain deterministic Python) is safe — it only needs to go into
+        # a JSON string via json.dumps() below, never back across calldata
+        # encoding. Keeps the stored shape/frontend contract (`agreement_ratio`
+        # as a 0-1 float) unchanged; only the internal nondet-boundary
+        # representation switched to an int percentage.
         consensus_record = {
             "case_id": case_id,
             "final_verdict": final_verdict,
             "overall_confidence": overall_confidence,
-            "agreement_ratio": parsed["agreement_ratio"],
+            "agreement_ratio": parsed["agreement_ratio_pct"] / 100.0,
             "method": parsed["method"],
             "resolution_explanation": parsed["resolution_explanation"],
             "dissenting_summary": parsed["dissenting_summary"],
@@ -823,12 +1003,24 @@ class CourtOfAgents(gl.Contract):
         self.cases[case_id] = json.dumps(case_data, sort_keys=True)
 
     @gl.public.write
-    def appeal_case(self, case_id: str, appellant_address: str, reason: str) -> None:
+    def appeal_case(self, case_id: str, reason: str, new_evidence: str = "") -> None:
         """
-        Flag a case as appealed. Deterministic bookkeeping only — re-running
-        judges/consensus after an appeal is a separate, explicit call to
-        run_judges()/calculate_consensus() so the appeal itself never risks
-        an Undetermined transaction.
+        Flag a case as appealed. Only the original claimant or the named
+        respondent may appeal (verified via gl.message.sender_address,
+        not a caller-supplied address parameter — the old signature took
+        an `appellant_address` argument that was never actually checked
+        against the caller, which meant anyone could appeal any case on
+        anyone's behalf). Optional `new_evidence` is appended to the case's
+        evidence_summary before the case is reopened.
+
+        Per the "full re-run" design decision: appealing resets status
+        back to "pending" (rather than a terminal "appealed" state) so
+        run_judges()/calculate_consensus() can be called again for a fresh
+        deliberation round with the new evidence included — reusing the
+        same stabilized panel/consensus flow rather than building a
+        separate appeal-specific evaluation path. Deterministic bookkeeping
+        only: re-running judges is still a separate, explicit call, so the
+        appeal itself never risks an Undetermined transaction.
         """
         case_raw = self.cases.get(case_id, "")
         if not case_raw:
@@ -838,7 +1030,22 @@ class CourtOfAgents(gl.Contract):
         if case_data.get("status") != "consensus_reached":
             raise Exception("Only cases with a consensus result can be appealed")
 
-        case_data["status"] = "appealed"
+        caller = gl.message.sender_address
+        claimant = Address(case_data["claimant_address"])
+        respondent = Address(case_data["respondent_address"])
+        if caller != claimant and caller != respondent:
+            raise Exception("Only the claimant or respondent may appeal this case")
+
+        appellant_address = caller.as_hex
+        appeal_round = int(case_data.get("appeal_round", 0)) + 1
+
+        if new_evidence:
+            existing = case_data.get("evidence_summary", "")
+            addition = f"\n[Appeal round {appeal_round} evidence] {_truncate(new_evidence, MAX_STORED_FIELD_CHARS)}"
+            case_data["evidence_summary"] = _truncate(existing + addition, MAX_STORED_FIELD_CHARS)
+
+        case_data["appeal_round"] = appeal_round
+        case_data["status"] = "pending"
         self.cases[case_id] = json.dumps(case_data, sort_keys=True)
 
         appeal_record = json.dumps(
@@ -846,6 +1053,7 @@ class CourtOfAgents(gl.Contract):
                 "case_id": case_id,
                 "appellant_address": appellant_address,
                 "reason": _truncate(reason, MAX_STORED_FIELD_CHARS),
+                "appeal_round": appeal_round,
             },
             sort_keys=True,
         )

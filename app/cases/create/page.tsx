@@ -95,10 +95,7 @@ export default function CreateCasePage() {
   const [claimASummary, setClaimASummary] = useState("");
   const [claimAArgument, setClaimAArgument] = useState("");
   const [claimAOutcome, setClaimAOutcome] = useState("");
-  const [claimBName, setClaimBName] = useState("");
-  const [claimBSummary, setClaimBSummary] = useState("");
-  const [claimBArgument, setClaimBArgument] = useState("");
-  const [claimBOutcome, setClaimBOutcome] = useState("");
+  const [respondentAddress, setRespondentAddress] = useState("");
   const [evidence, setEvidence] = useState("");
 
   if (!connected) {
@@ -131,15 +128,13 @@ export default function CreateCasePage() {
     const cleanAName       = c(claimAName);
     const cleanASummary    = c(claimASummary);
     const cleanAArgument   = c(claimAArgument);
-    const cleanAOutcome    = c(claimAOutcome);
-    const cleanBName       = c(claimBName);
-    const cleanBSummary    = c(claimBSummary);
-    const cleanBArgument   = c(claimBArgument);
-    const cleanBOutcome    = c(claimBOutcome);
+    const cleanRespondent  = c(respondentAddress);
     const cleanEvidence    = c(evidence) || "No additional evidence provided.";
 
     try {
       // ── Step 1: Save to Supabase ──────────────────────────────────────────
+      // claim_b is not known yet — it's filled in later by the named
+      // respondent via respond_to_case(). Case starts "awaiting_response".
       setSubmitStage("Saving case...");
       const supaRes = await fetch("/api/cases", {
         method: "POST",
@@ -153,14 +148,11 @@ export default function CreateCasePage() {
             agent_name: cleanAName,
             summary: cleanASummary,
             detailed_argument: cleanAArgument,
-            requested_outcome: cleanAOutcome,
+            requested_outcome: claimAOutcome,
           },
-          claim_b: {
-            agent_name: cleanBName,
-            summary: cleanBSummary,
-            detailed_argument: cleanBArgument,
-            requested_outcome: cleanBOutcome,
-          },
+          claim_b: null,
+          claimant_address: address,
+          respondent_address: cleanRespondent,
         }),
       });
 
@@ -186,9 +178,7 @@ export default function CreateCasePage() {
             claim_a_name:      cleanAName,
             claim_a_summary:   cleanASummary,
             claim_a_argument:  cleanAArgument,
-            claim_b_name:      cleanBName,
-            claim_b_summary:   cleanBSummary,
-            claim_b_argument:  cleanBArgument,
+            respondent_address: cleanRespondent,
             evidence_summary:  cleanEvidence,
           },
         }),
@@ -235,6 +225,8 @@ export default function CreateCasePage() {
             <h1 className="text-2xl font-bold text-neutral-900 mb-2">Case Submitted!</h1>
             <p className="text-sm text-neutral-600 mb-6">
               Your case has been saved and recorded on GenLayer StudioNet.
+              It's now waiting for the respondent wallet you named to submit
+              their side before AI judges can run.
             </p>
 
             {txHash && (
@@ -360,18 +352,22 @@ export default function CreateCasePage() {
             </div>
           </Card>
 
-          {/* Agent B */}
+          {/* Respondent */}
           <Card className="border-l-4 border-l-red-500">
-            <h2 className="text-lg font-semibold text-red-700 mb-4">Agent B — Claim</h2>
-            <div className="space-y-4">
-              <Input label="Agent Name" value={claimBName} onChange={(e) => setClaimBName(e.target.value)} placeholder="ConsumerGuard AI" required />
-              <Input label="Summary" value={claimBSummary} onChange={(e) => setClaimBSummary(e.target.value)} placeholder="One-sentence position" required />
-              <div>
-                <label className="block text-sm font-medium text-neutral-700 mb-1">Detailed Argument</label>
-                <textarea value={claimBArgument} onChange={(e) => setClaimBArgument(e.target.value)} placeholder="Full argument supporting Agent B..." className="w-full rounded-lg border border-neutral-300 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none resize-none" rows={3} required />
-              </div>
-              <Input label="Requested Outcome" value={claimBOutcome} onChange={(e) => setClaimBOutcome(e.target.value)} placeholder="What does Agent B want?" required />
-            </div>
+            <h2 className="text-lg font-semibold text-red-700 mb-1">Respondent — Agent B</h2>
+            <p className="text-xs text-neutral-400 mb-3">
+              Enter the wallet address of the agent you're disputing with. Only
+              this wallet will be able to submit Agent B's claim — the case
+              stays "awaiting response" until they do.
+            </p>
+            <Input
+              label="Respondent Wallet Address"
+              value={respondentAddress}
+              onChange={(e) => setRespondentAddress(e.target.value)}
+              placeholder="0x..."
+              required
+              minLength={42}
+            />
           </Card>
 
           {/* Evidence */}

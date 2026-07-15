@@ -7,10 +7,13 @@ import { Card, CardTitle, CardDescription, CardContent } from "@/components/ui/c
 import { RunJudgesButton } from "@/features/cases/components/run-judges-button";
 import { SubmitOnChainButton } from "@/features/contracts/components/submit-onchain-button";
 import { SubmitDecision } from "@/features/cases/components/submit-decision";
+import { RespondToCase } from "@/features/cases/components/respond-to-case";
+import { AppealCase } from "@/features/cases/components/appeal-case";
 
 export const dynamic = "force-dynamic";
 
 const statusVariants: Record<string, "default" | "info" | "warning" | "success" | "danger"> = {
+  awaiting_response: "warning",
   pending: "default",
   in_review: "info",
   deliberating: "warning",
@@ -64,7 +67,7 @@ export default async function CaseDetailPage({
     : { data: null };
 
   const claimA = caseData.claim_a as Record<string, string>;
-  const claimB = caseData.claim_b as Record<string, string>;
+  const claimB = caseData.claim_b as Record<string, string> | null;
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -110,22 +113,35 @@ export default async function CaseDetailPage({
             </CardContent>
           </Card>
 
-          <Card className="border-l-4 border-l-red-500">
-            <CardTitle className="text-red-700">
-              Agent B: {claimB.agent_name}
-            </CardTitle>
-            <CardDescription className="mt-1 font-medium">
-              {claimB.summary}
-            </CardDescription>
-            <CardContent className="mt-3">
-              <p className="text-sm text-neutral-600">
-                {claimB.detailed_argument}
-              </p>
-              <p className="mt-3 text-sm font-medium text-red-600">
-                Requested: {claimB.requested_outcome}
-              </p>
-            </CardContent>
-          </Card>
+          {claimB ? (
+            <Card className="border-l-4 border-l-red-500">
+              <CardTitle className="text-red-700">
+                Agent B: {claimB.agent_name}
+              </CardTitle>
+              <CardDescription className="mt-1 font-medium">
+                {claimB.summary}
+              </CardDescription>
+              <CardContent className="mt-3">
+                <p className="text-sm text-neutral-600">
+                  {claimB.detailed_argument}
+                </p>
+                <p className="mt-3 text-sm font-medium text-red-600">
+                  Requested: {claimB.requested_outcome}
+                </p>
+              </CardContent>
+            </Card>
+          ) : (
+            <Card className="border-l-4 border-l-neutral-300 flex items-center justify-center text-center py-8">
+              <div>
+                <p className="text-sm font-medium text-neutral-500">
+                  Awaiting response from the named respondent
+                </p>
+                <p className="mt-1 text-xs text-neutral-400 font-mono break-all">
+                  {caseData.respondent_address}
+                </p>
+              </div>
+            </Card>
+          )}
         </div>
 
         {/* Evidence */}
@@ -184,26 +200,36 @@ export default async function CaseDetailPage({
           )}
         </div>
 
-        {/* Action Buttons */}
-        <div className="mb-8">
-          <RunJudgesButton
-            caseId={id}
-            caseStatus={caseData.status}
-            hasVerdicts={!!verdicts && verdicts.length > 0}
-            isOnChain={!!caseData.onchain_tx_hash}
-            caseTitle={caseData.title}
-            caseDescription={caseData.description}
-            caseCategory={caseData.category}
-            caseDifficulty={caseData.difficulty}
-            claimAName={claimA.agent_name}
-            claimASummary={claimA.summary}
-            claimAArgument={claimA.detailed_argument || claimA.argument || ""}
-            claimBName={claimB.agent_name}
-            claimBSummary={claimB.summary}
-            claimBArgument={claimB.detailed_argument || claimB.argument || ""}
-            evidenceSummary={(evidence || []).map((e: any) => `[${e.type}] ${e.title}: ${e.content}`).join(" | ")}
-          />
-        </div>
+        {/* Respond to case (only shown while awaiting_response) */}
+        <RespondToCase
+          caseId={id}
+          caseStatus={caseData.status}
+          respondentAddress={caseData.respondent_address || ""}
+          claimantAddress={caseData.claimant_address || ""}
+        />
+
+        {/* Action Buttons — only meaningful once claim_b exists */}
+        {claimB && (
+          <div className="mb-8">
+            <RunJudgesButton
+              caseId={id}
+              caseStatus={caseData.status}
+              hasVerdicts={!!verdicts && verdicts.length > 0}
+              isOnChain={!!caseData.onchain_tx_hash}
+              caseTitle={caseData.title}
+              caseDescription={caseData.description}
+              caseCategory={caseData.category}
+              caseDifficulty={caseData.difficulty}
+              claimAName={claimA.agent_name}
+              claimASummary={claimA.summary}
+              claimAArgument={claimA.detailed_argument || claimA.argument || ""}
+              claimBName={claimB.agent_name}
+              claimBSummary={claimB.summary}
+              claimBArgument={claimB.detailed_argument || claimB.argument || ""}
+              evidenceSummary={(evidence || []).map((e: any) => `[${e.type}] ${e.title}: ${e.content}`).join(" | ")}
+            />
+          </div>
+        )}
 
         {/* Verdicts */}
         {verdicts && verdicts.length > 0 && (
@@ -278,7 +304,7 @@ export default async function CaseDetailPage({
                   caseId={id}
                   caseTitle={caseData.title}
                   claimASummary={claimA.summary}
-                  claimBSummary={claimB.summary}
+                  claimBSummary={claimB?.summary || ""}
                   consensusVerdict={consensus.final_verdict}
                   hasOnChainTx={!!caseData.onchain_tx_hash}
                 />
@@ -286,6 +312,14 @@ export default async function CaseDetailPage({
             </Card>
           </div>
         )}
+
+        {/* Appeal */}
+        <AppealCase
+          caseId={id}
+          caseStatus={caseData.status}
+          claimantAddress={caseData.claimant_address || ""}
+          respondentAddress={caseData.respondent_address || ""}
+        />
 
         {/* User Decision */}
         <SubmitDecision caseId={id} hasConsensus={!!consensus} />
