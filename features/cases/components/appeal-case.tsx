@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useWallet } from "@/hooks/use-wallet";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { createBrowserClient, CONTRACT_ADDRESS, sanitizeArg } from "@/lib/genlayer-browser";
 
 interface AppealCaseProps {
   caseId: string;
@@ -19,7 +20,7 @@ export function AppealCase({
   claimantAddress,
   respondentAddress,
 }: AppealCaseProps) {
-  const { connected, address, privateKey } = useWallet();
+  const { connected, address } = useWallet();
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState("");
   const [newEvidence, setNewEvidence] = useState("");
@@ -53,17 +54,16 @@ export function AppealCase({
     setLoading(true);
     setError("");
     try {
-      const res = await fetch("/api/contracts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "appeal_case",
-          private_key: privateKey,
-          params: { case_id: caseId, reason, new_evidence: newEvidence },
-        }),
+      // The contract verifies the caller is the claimant or respondent via
+      // gl.message.sender_address — no need to pass the address explicitly.
+      const client = createBrowserClient(address);
+      const hash = await client.writeContract({
+        value: BigInt(0),
+        address: CONTRACT_ADDRESS,
+        functionName: "appeal_case",
+        args: [sanitizeArg(caseId), sanitizeArg(reason), sanitizeArg(newEvidence)],
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed to appeal");
+      await client.waitForTransactionReceipt({ hash: hash as `0x${string}` });
 
       await fetch(`/api/cases/${caseId}`, {
         method: "PATCH",

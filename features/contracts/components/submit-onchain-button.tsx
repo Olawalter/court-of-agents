@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useWallet } from "@/hooks/use-wallet";
 import { Button } from "@/components/ui/button";
+import { createBrowserClient, CONTRACT_ADDRESS } from "@/lib/genlayer-browser";
 
 interface SubmitOnChainButtonProps {
   caseId: string;
@@ -25,7 +26,7 @@ export function SubmitOnChainButton({
   const [loading, setLoading] = useState(false);
   const [txHash, setTxHash] = useState("");
   const [error, setError] = useState("");
-  const { privateKey } = useWallet();
+  const { address } = useWallet();
   const router = useRouter();
 
   if (hasOnChainTx) {
@@ -46,23 +47,15 @@ export function SubmitOnChainButton({
       // (auto-run inside calculate_consensus) already happened on-chain
       // earlier in the flow. The remaining lifecycle step is finalizing
       // the case now that consensus has been reached.
-      const res = await fetch("/api/contracts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "finalize_case",
-          private_key: privateKey,
-          params: { case_id: caseId },
-        }),
+      const client = createBrowserClient(address);
+      const hash = await client.writeContract({
+        value: BigInt(0),
+        address: CONTRACT_ADDRESS,
+        functionName: "finalize_case",
+        args: [caseId],
       });
-
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || "Failed to finalize case on-chain");
-      }
-
-      const data = await res.json();
-      setTxHash(data.tx_hash);
+      await client.waitForTransactionReceipt({ hash: hash as `0x${string}` });
+      setTxHash(String(hash));
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");

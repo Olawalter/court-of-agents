@@ -6,6 +6,7 @@ import { useWallet } from "@/hooks/use-wallet";
 import { Button } from "@/components/ui/button";
 import { Card, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { createBrowserClient, CONTRACT_ADDRESS, sanitizeArg } from "@/lib/genlayer-browser";
 
 interface RespondToCaseProps {
   caseId: string;
@@ -20,7 +21,7 @@ export function RespondToCase({
   respondentAddress,
   claimantAddress,
 }: RespondToCaseProps) {
-  const { connected, address, privateKey } = useWallet();
+  const { connected, address } = useWallet();
   const [agentName, setAgentName] = useState("");
   const [summary, setSummary] = useState("");
   const [argument, setArgument] = useState("");
@@ -98,27 +99,23 @@ export function RespondToCase({
     setError("");
 
     try {
-      // Step 1: submit claim B on-chain — this is what actually moves the
-      // case out of "awaiting_response" and enforces that only this wallet
-      // (the named respondent) can do so.
-      const contractRes = await fetch("/api/contracts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "respond_to_case",
-          private_key: privateKey,
-          params: {
-            case_id: caseId,
-            claim_b_name: agentName,
-            claim_b_summary: summary,
-            claim_b_argument: argument,
-          },
-        }),
+      // Step 1: submit claim B on-chain — only the named respondent wallet
+      // can call this (enforced by gl.message.sender_address in the contract).
+      // MetaMask / Rabby shows the approval popup here.
+      const client = createBrowserClient(address);
+      const hash = await client.writeContract({
+        value: BigInt(0),
+        address: CONTRACT_ADDRESS,
+        functionName: "respond_to_case",
+        args: [
+          sanitizeArg(caseId),
+          sanitizeArg(agentName),
+          sanitizeArg(summary),
+          sanitizeArg(argument),
+        ],
       });
-
-      const contractData = await contractRes.json();
-      if (!contractRes.ok) throw new Error(contractData.error || "Failed to submit response");
-      setTxHash(contractData.tx_hash || "");
+      setTxHash(String(hash));
+      await client.waitForTransactionReceipt({ hash: hash as `0x${string}` });
 
       // Step 2: mirror into Supabase so the UI reflects it immediately
       await fetch(`/api/cases/${caseId}`, {

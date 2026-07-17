@@ -6,6 +6,7 @@ import { useWallet } from "@/hooks/use-wallet";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { createBrowserClient, CONTRACT_ADDRESS, sanitizeArg } from "@/lib/genlayer-browser";
 
 interface AttachEvidenceProps {
   caseId: string;
@@ -25,7 +26,7 @@ export function AttachEvidence({
   respondentAddress,
   hasEvidence,
 }: AttachEvidenceProps) {
-  const { connected, address, privateKey } = useWallet();
+  const { connected, address } = useWallet();
   const [url, setUrl] = useState("");
   const [label, setLabel] = useState("");
   const [loading, setLoading] = useState(false);
@@ -54,19 +55,18 @@ export function AttachEvidence({
     setLastSummary("");
 
     try {
-      // Step 1: fetch + verify on-chain via GenLayer's web access
+      // Step 1: fetch + verify on-chain via GenLayer's web access.
+      // The tx is signed by the injected wallet (MetaMask / Rabby).
       setStep("Fetching and verifying via GenLayer LLM...");
-      const contractRes = await fetch("/api/contracts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "attach_web_evidence",
-          private_key: privateKey,
-          params: { case_id: caseId, url, label },
-        }),
+      const client = createBrowserClient(address);
+      const hash = await client.writeContract({
+        value: BigInt(0),
+        address: CONTRACT_ADDRESS,
+        functionName: "attach_web_evidence",
+        args: [sanitizeArg(caseId), sanitizeArg(url), sanitizeArg(label)],
       });
-      const contractData = await contractRes.json();
-      if (!contractRes.ok) throw new Error(contractData.error || "Failed to fetch evidence");
+      setStep("Waiting for GenLayer consensus...");
+      await client.waitForTransactionReceipt({ hash: hash as `0x${string}` });
 
       // Step 2: read back the verified summary that was actually stored
       setStep("Reading verified summary...");

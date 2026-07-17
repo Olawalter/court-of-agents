@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useWallet } from "@/hooks/use-wallet";
+import { createBrowserClient, CONTRACT_ADDRESS, sanitizeArg } from "@/lib/genlayer-browser";
 import { Header } from "@/components/layout/header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -79,7 +80,7 @@ function cleanText(value: string): string {
 }
 
 export default function CreateCasePage() {
-  const { connected, address, privateKey } = useWallet();
+  const { connected, address } = useWallet();
   const router = useRouter();
   const [step, setStep] = useState<"form" | "submitting" | "success">("form");
   const [submitStage, setSubmitStage] = useState("");
@@ -161,49 +162,29 @@ export default function CreateCasePage() {
       const caseId = supaData.id as string;
       setSavedCaseId(caseId);
 
-      // ── Step 2: Submit to GenLayer contract ───────────────────────────────
-      setSubmitStage("Submitting on-chain...");
-      const contractRes = await fetch("/api/contracts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "submit_case",
-          private_key: privateKey,
-          params: {
-            case_id: caseId,
-            title: cleanTitle,
-            description: cleanDesc,
-            category,
-            difficulty,
-            claim_a_name:      cleanAName,
-            claim_a_summary:   cleanASummary,
-            claim_a_argument:  cleanAArgument,
-            respondent_address: cleanRespondent,
-            evidence_summary:  cleanEvidence,
-          },
-        }),
+      // ── Step 2: Submit to GenLayer contract (signed by injected wallet) ──
+      setSubmitStage("Approve transaction in your wallet...");
+      const client = createBrowserClient(address);
+      const hash = await client.writeContract({
+        value: BigInt(0),
+        address: CONTRACT_ADDRESS,
+        functionName: "submit_case",
+        args: [
+          sanitizeArg(caseId),
+          sanitizeArg(cleanTitle),
+          sanitizeArg(cleanDesc),
+          sanitizeArg(category),
+          difficulty,
+          sanitizeArg(cleanAName),
+          sanitizeArg(cleanASummary),
+          sanitizeArg(cleanAArgument),
+          sanitizeArg(cleanRespondent),
+          sanitizeArg(cleanEvidence),
+        ],
       });
-
-      const contractData = await contractRes.json();
-      if (!contractRes.ok) throw new Error(contractData.error || "On-chain submission failed");
-      if (contractData.tx_hash) setTxHash(contractData.tx_hash);
-
-      // ── Step 3: Register in dispute registry (non-blocking) ───────────────
-      setSubmitStage("Registering dispute...");
-      await fetch("/api/contracts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "register_dispute",
-          private_key: privateKey,
-          params: {
-            dispute_id: caseId,
-            title: cleanTitle,
-            category,
-            submitter_address: address,
-          },
-        }),
-      }).catch(() => {}); // non-critical — don't block on failure
+      setTxHash(String(hash));
+      setSubmitStage("Waiting for GenLayer consensus...");
+      await client.waitForTransactionReceipt({ hash: hash as `0x${string}` });
 
       setStep("success");
     } catch (err) {

@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { createSupabaseAdmin } from "@/services/supabase/server";
+import { getGenLayerClient, CONTRACT_ADDRESSES } from "@/services/genlayer/client";
 import { Header } from "@/components/layout/header";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
@@ -10,6 +11,7 @@ import { SubmitDecision } from "@/features/cases/components/submit-decision";
 import { RespondToCase } from "@/features/cases/components/respond-to-case";
 import { AppealCase } from "@/features/cases/components/appeal-case";
 import { AttachEvidence } from "@/features/cases/components/attach-evidence";
+import type { OnChainVerdict, OnChainConsensus } from "@/lib/genlayer-browser";
 
 export const dynamic = "force-dynamic";
 
@@ -39,6 +41,8 @@ export default async function CaseDetailPage({
   const { id } = await params;
   const supabase = createSupabaseAdmin();
 
+  // Case metadata (title, description, claims, status, wallet addresses)
+  // is mirrored in Supabase for fast listing. It is not adjudication data.
   const { data: caseData, error } = await supabase
     .from("cases")
     .select("*")
@@ -47,25 +51,34 @@ export default async function CaseDetailPage({
 
   if (error || !caseData) notFound();
 
+  // Evidence display — mirrored from on-chain after attach_web_evidence finalizes.
   const { data: evidence } = await supabase
     .from("evidence")
     .select("*")
     .eq("case_id", id)
     .order("created_at", { ascending: true });
 
-  const { data: verdicts } = await supabase
-    .from("verdicts")
-    .select("*")
-    .eq("case_id", id)
-    .order("created_at", { ascending: true });
+  // ── Verdicts and consensus: SOLE SOURCE OF TRUTH IS THE CONTRACT ─────────
+  // We read get_verdicts() and get_consensus() directly from the GenLayer
+  // contract so the displayed adjudication is always receipt-confirmed
+  // on-chain data, never an off-chain approximation.
+  let verdicts: OnChainVerdict[] | null = null;
+  let consensus: OnChainConsensus | null = null;
+  try {
+    const { client } = getGenLayerClient();
+    const adjAddr = CONTRACT_ADDRESSES.adjudicator;
 
-  const { data: consensus } = caseData.consensus_id
-    ? await supabase
-        .from("consensus_results")
-        .select("*")
-        .eq("id", caseData.consensus_id)
-        .single()
-    : { data: null };
+    const [rawVerdicts, rawConsensus] = await Promise.all([
+      client.readContract({ address: adjAddr, functionName: "get_verdicts", args: [id] }),
+      client.readContract({ address: adjAddr, functionName: "get_consensus", args: [id] }),
+    ]);
+
+    if (rawVerdicts) verdicts = JSON.parse(rawVerdicts as string) as OnChainVerdict[];
+    if (rawConsensus) consensus = JSON.parse(rawConsensus as string) as OnChainConsensus;
+  } catch {
+    // Contract read failed (e.g. StudioNet temporarily unreachable).
+    // Render the page without verdict/consensus data rather than 500ing.
+  }
 
   const claimA = caseData.claim_a as Record<string, string>;
   const claimB = caseData.claim_b as Record<string, string> | null;
@@ -230,34 +243,25 @@ export default async function CaseDetailPage({
               caseStatus={caseData.status}
               hasVerdicts={!!verdicts && verdicts.length > 0}
               hasEvidence={!!evidence && evidence.length > 0}
-              isOnChain={!!caseData.onchain_tx_hash}
-              caseTitle={caseData.title}
-              caseDescription={caseData.description}
-              caseCategory={caseData.category}
-              caseDifficulty={caseData.difficulty}
-              claimAName={claimA.agent_name}
-              claimASummary={claimA.summary}
-              claimAArgument={claimA.detailed_argument || claimA.argument || ""}
-              claimBName={claimB.agent_name}
-              claimBSummary={claimB.summary}
-              claimBArgument={claimB.detailed_argument || claimB.argument || ""}
-              evidenceSummary={(evidence || []).map((e: any) => `[${e.type}] ${e.title}: ${e.content}`).join(" | ")}
             />
           </div>
         )}
 
-        {/* Verdicts */}
+        {/* Verdicts — read from get_verdicts() contract view */}
         {verdicts && verdicts.length > 0 && (
           <div className="mb-8">
             <h2 className="text-xl font-bold text-neutral-900 mb-4">
-              Judge Verdicts
+              Judge Verdicts{" "}
+              <span className="text-sm font-normal text-green-600">
+                — verified on-chain
+              </span>
             </h2>
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
               {verdicts.map((v) => (
-                <Card key={v.id}>
+                <Card key={v.persona}>
                   <div className="flex items-center justify-between mb-2">
                     <h3 className="font-semibold text-neutral-900 capitalize">
-                      {v.judge_persona} Judge
+                      {v.persona} Judge
                     </h3>
                     <span className="text-lg font-bold text-brand-600">
                       {v.confidence}%
@@ -265,9 +269,9 @@ export default async function CaseDetailPage({
                   </div>
                   <Badge
                     variant={
-                      v.verdict.includes("favor_a")
+                      v.verdict.startsWith("FAVOR_A") || v.verdict.startsWith("PARTIAL_A")
                         ? "info"
-                        : v.verdict.includes("favor_b")
+                        : v.verdict.startsWith("FAVOR_B") || v.verdict.startsWith("PARTIAL_B")
                           ? "danger"
                           : "warning"
                     }
@@ -284,11 +288,14 @@ export default async function CaseDetailPage({
           </div>
         )}
 
-        {/* Consensus */}
+        {/* Consensus — read from get_consensus() contract view */}
         {consensus && (
           <div className="mb-8">
             <h2 className="text-xl font-bold text-neutral-900 mb-4">
-              Consensus Result
+              Consensus Result{" "}
+              <span className="text-sm font-normal text-green-600">
+                — verified on-chain
+              </span>
             </h2>
             <Card className="border-2 border-brand-200 bg-brand-50/30">
               <div className="flex items-center justify-between mb-4">
@@ -313,7 +320,7 @@ export default async function CaseDetailPage({
               <div className="flex items-center justify-between mt-4 pt-4 border-t border-neutral-200">
                 <div className="text-xs text-neutral-500">
                   Agreement: {Math.round(consensus.agreement_ratio * 100)}% |{" "}
-                  Judges: {(consensus.participating_judges as string[]).length}
+                  Judges: {consensus.participating_judges.length}
                 </div>
                 <SubmitOnChainButton
                   caseId={id}
@@ -336,7 +343,7 @@ export default async function CaseDetailPage({
           respondentAddress={caseData.respondent_address || ""}
         />
 
-        {/* User Decision */}
+        {/* User Decision — only available once on-chain consensus exists */}
         <SubmitDecision caseId={id} hasConsensus={!!consensus} />
       </main>
     </div>

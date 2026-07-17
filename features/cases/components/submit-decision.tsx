@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useWallet } from "@/hooks/use-wallet";
 import { Button } from "@/components/ui/button";
 import { Card, CardTitle } from "@/components/ui/card";
+import { createBrowserClient, CONTRACT_ADDRESS, sanitizeArg } from "@/lib/genlayer-browser";
 
 interface SubmitDecisionProps {
   caseId: string;
@@ -20,7 +21,7 @@ const verdictOptions = [
 ];
 
 export function SubmitDecision({ caseId, hasConsensus }: SubmitDecisionProps) {
-  const { connected, address, privateKey } = useWallet();
+  const { connected, address } = useWallet();
   const [selectedVerdict, setSelectedVerdict] = useState("");
   const [reasoning, setReasoning] = useState("");
   const [loading, setLoading] = useState(false);
@@ -62,29 +63,20 @@ export function SubmitDecision({ caseId, hasConsensus }: SubmitDecisionProps) {
     setError("");
 
     try {
-      // Submit decision on-chain via Adjudicator contract
-      const res = await fetch("/api/contracts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "submit_user_decision",
-          private_key: privateKey,
-          params: {
-            case_id: caseId,
-            user_address: address,
-            decision: selectedVerdict,
-            reasoning,
-          },
-        }),
+      const client = createBrowserClient(address);
+      const hash = await client.writeContract({
+        value: BigInt(0),
+        address: CONTRACT_ADDRESS,
+        functionName: "submit_user_decision",
+        args: [
+          sanitizeArg(caseId),
+          sanitizeArg(address),
+          sanitizeArg(selectedVerdict),
+          sanitizeArg(reasoning),
+        ],
       });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to submit decision");
-      }
-
-      setTxHash(data.tx_hash || "");
+      await client.waitForTransactionReceipt({ hash: hash as `0x${string}` });
+      setTxHash(String(hash));
       setSubmitted(true);
       router.refresh();
     } catch (err) {
