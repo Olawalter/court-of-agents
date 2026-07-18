@@ -41,44 +41,68 @@ export default async function CaseDetailPage({
   const { id } = await params;
   const supabase = createSupabaseAdmin();
 
-  // Case metadata (title, description, claims, status, wallet addresses)
-  // is mirrored in Supabase for fast listing. It is not adjudication data.
-  const { data: caseData, error } = await supabase
+  // ── All reads from the GenLayer contract ─────────────────────────────────
+  let verdicts: OnChainVerdict[] | null = null;
+  let consensus: OnChainConsensus | null = null;
+  let onChainCase: Record<string, any> | null = null;
+
+  try {
+    const { client } = getGenLayerClient();
+    const adjAddr = CONTRACT_ADDRESSES.adjudicator;
+
+    const [rawCase, rawVerdicts, rawConsensus] = await Promise.all([
+      client.readContract({ address: adjAddr, functionName: "get_case", args: [id] }),
+      client.readContract({ address: adjAddr, functionName: "get_verdicts", args: [id] }),
+      client.readContract({ address: adjAddr, functionName: "get_consensus", args: [id] }),
+    ]);
+
+    if (rawCase) onChainCase = JSON.parse(rawCase as string);
+    if (rawVerdicts) verdicts = JSON.parse(rawVerdicts as string) as OnChainVerdict[];
+    if (rawConsensus) consensus = JSON.parse(rawConsensus as string) as OnChainConsensus;
+  } catch {
+    // StudioNet temporarily unreachable — fall through to Supabase only.
+  }
+
+  // ── Case metadata: Supabase first (fast), fall back to on-chain ──────────
+  const { data: supabaseCase } = await supabase
     .from("cases")
     .select("*")
     .eq("id", id)
     .single();
 
-  if (error || !caseData) notFound();
+  // Normalise on-chain shape to match what the JSX below expects.
+  // Contract uses "argument"; Supabase uses "detailed_argument".
+  function normaliseFromChain(raw: Record<string, any>) {
+    const norm = (claim: any) =>
+      claim
+        ? { ...claim, detailed_argument: claim.argument ?? claim.detailed_argument ?? "" }
+        : null;
+    return {
+      ...raw,
+      id: raw.case_id ?? id,
+      claim_a: norm(raw.claim_a),
+      claim_b: norm(raw.claim_b),
+      on_chain_tx: null,
+    };
+  }
 
-  // Evidence display — mirrored from on-chain after attach_web_evidence finalizes.
-  const { data: evidence } = await supabase
+  const caseData: Record<string, any> | null =
+    supabaseCase ?? (onChainCase ? normaliseFromChain(onChainCase) : null);
+
+  if (!caseData) notFound();
+
+  // Evidence: from Supabase if available, otherwise infer from contract evidence_count.
+  const { data: supabaseEvidence } = await supabase
     .from("evidence")
     .select("*")
     .eq("case_id", id)
     .order("created_at", { ascending: true });
 
-  // ── Verdicts and consensus: SOLE SOURCE OF TRUTH IS THE CONTRACT ─────────
-  // We read get_verdicts() and get_consensus() directly from the GenLayer
-  // contract so the displayed adjudication is always receipt-confirmed
-  // on-chain data, never an off-chain approximation.
-  let verdicts: OnChainVerdict[] | null = null;
-  let consensus: OnChainConsensus | null = null;
-  try {
-    const { client } = getGenLayerClient();
-    const adjAddr = CONTRACT_ADDRESSES.adjudicator;
+  const evidence = supabaseEvidence ?? [];
 
-    const [rawVerdicts, rawConsensus] = await Promise.all([
-      client.readContract({ address: adjAddr, functionName: "get_verdicts", args: [id] }),
-      client.readContract({ address: adjAddr, functionName: "get_consensus", args: [id] }),
-    ]);
-
-    if (rawVerdicts) verdicts = JSON.parse(rawVerdicts as string) as OnChainVerdict[];
-    if (rawConsensus) consensus = JSON.parse(rawConsensus as string) as OnChainConsensus;
-  } catch {
-    // Contract read failed (e.g. StudioNet temporarily unreachable).
-    // Render the page without verdict/consensus data rather than 500ing.
-  }
+  // hasEvidence: Supabase rows OR contract evidence_count > 0
+  const hasEvidence =
+    evidence.length > 0 || (onChainCase?.evidence_count ?? 0) > 0;
 
   const claimA = caseData.claim_a as Record<string, string>;
   const claimB = caseData.claim_b as Record<string, string> | null;
@@ -230,7 +254,7 @@ export default async function CaseDetailPage({
               caseId={id}
               claimantAddress={caseData.claimant_address || ""}
               respondentAddress={caseData.respondent_address || ""}
-              hasEvidence={!!evidence && evidence.length > 0}
+              hasEvidence={hasEvidence}
             />
           </div>
         )}
@@ -242,7 +266,7 @@ export default async function CaseDetailPage({
               caseId={id}
               caseStatus={caseData.status}
               hasVerdicts={!!verdicts && verdicts.length > 0}
-              hasEvidence={!!evidence && evidence.length > 0}
+              hasEvidence={hasEvidence}
             />
           </div>
         )}

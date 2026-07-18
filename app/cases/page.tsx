@@ -1,19 +1,53 @@
 import Link from "next/link";
 import { createSupabaseAdmin } from "@/services/supabase/server";
+import { getGenLayerClient, CONTRACT_ADDRESSES } from "@/services/genlayer/client";
 import { Header } from "@/components/layout/header";
 import { AnimatedCaseCard } from "@/features/cases/components/animated-case-card";
 
-// This page has no cookies()/headers() calls, so without this Next.js treats
-// it as static and caches the rendered HTML at build/deploy time — new or
-// cleared cases in Supabase would never show up without a fresh deploy.
 export const dynamic = "force-dynamic";
 
 export default async function CasesPage() {
   const supabase = createSupabaseAdmin();
-  const { data: cases } = await supabase
+  const { data: supabaseCases } = await supabase
     .from("cases")
     .select("*")
     .order("created_at", { ascending: false });
+
+  // Fall back to on-chain enumeration when Supabase is not configured.
+  let cases: any[] = supabaseCases ?? [];
+  if (cases.length === 0) {
+    try {
+      const { client } = getGenLayerClient();
+      const addr = CONTRACT_ADDRESSES.adjudicator;
+      const rawIds = await client.readContract({
+        address: addr,
+        functionName: "list_case_ids",
+        args: [0, 50],
+      });
+      if (rawIds) {
+        const ids: string[] = JSON.parse(rawIds as string);
+        const rawCases = await Promise.all(
+          ids.map((cid) =>
+            client.readContract({ address: addr, functionName: "get_case", args: [cid] })
+          )
+        );
+        cases = rawCases
+          .filter(Boolean)
+          .map((r) => JSON.parse(r as string))
+          .map((c) => ({
+            ...c,
+            id: c.case_id,
+            // Convert on-chain unix timestamp (seconds) to ISO string
+            created_at: c.created_at
+              ? new Date(c.created_at * 1000).toISOString()
+              : null,
+          }))
+          .reverse(); // newest first
+      }
+    } catch {
+      // StudioNet unreachable — show empty list
+    }
+  }
 
   return (
     <div className="flex min-h-screen flex-col">

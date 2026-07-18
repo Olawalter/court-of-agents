@@ -1,63 +1,16 @@
 # { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
-#
-# Court of Agents — Unified Intelligent Contract
-# =================================================
-#
-# This single contract replaces three previously-separate contracts:
-#   - intelligent-contracts/adjudicator/contract.py    (CourtAdjudicator)
-#   - intelligent-contracts/reputation/contract.py      (ReputationTracker)
-#   - intelligent-contracts/dispute_registry/contract.py (DisputeRegistry)
-#
-# All three sets of storage and public methods are preserved here under one
-# deployed address so the frontend only has to talk to a single contract.
-# Reputation updates and the dispute audit log are now wired directly into
-# the adjudication flow instead of requiring the frontend to make three
-# separate transactions against three separate contracts.
-#
-# --- Why the LLM calls are structured the way they are ------------------
-#
-# GenLayer reaches consensus over non-deterministic operations (LLM calls,
-# web fetches) through the Equivalence Principle: the leader node executes
-# a function and produces a result; validator nodes independently execute
-# (or judge) that result and vote on whether it is "equivalent enough" to
-# accept. A raw `gl.nondet.exec_prompt(...)` call by itself is NOT
-# consensus-safe — it must be wrapped so validators have a way to agree.
-#
-# Two wrapping strategies are used in this contract:
-#
-#   1. `gl.eq_principle.prompt_comparative(fn, principle=...)`
-#      Both the leader and each validator independently execute `fn`
-#      (which itself calls the LLM), and a comparison LLM judges whether
-#      the two outputs satisfy `principle`. This is the correct tool for
-#      subjective, judgment-based tasks — exactly what a judge persona or
-#      a consensus synthesis is. It is used for every judge/consensus call
-#      in this contract.
-#
-#   2. `gl.eq_principle.prompt_non_comparative(fn, task=..., criteria=...)`
-#      `fn` fetches raw data (e.g. a webpage) that is identical on every
-#      node; the leader performs `task` on that data, and validators only
-#      check the leader's output against `criteria` (they do not redo the
-#      task themselves). This fits open-ended tasks like "summarize this
-#      article" where two independently-generated summaries could be
-#      completely different in wording yet equally valid. It is used only
-#      for the optional web-evidence summarization feature below.
-#
-# The `principle` / `criteria` text in every wrapper below is intentionally
-# LENIENT: it asks validators to accept near-agreement (matching category,
-# confidence within a tolerance band, similar reasoning) rather than exact
-# string equality. Exact-match comparison of natural-language LLM output is
-# the single biggest cause of transactions ending in "Undetermined" status,
-# because two independent LLM calls essentially never produce byte-identical
-# text. Every wrapper here is deliberately tuned to still reject genuinely
-# different judgments (e.g. FAVOR_A vs FAVOR_B, or wildly different
-# confidence) while tolerating wording drift, so the contract stays both
-# safe (bad-faith or wildly divergent leader output is rejected) and live
-# (normal LLM variance does not stall consensus).
-#
-# --------------------------------------------------------------------------
 
 from genlayer import *
 import json
+from datetime import datetime, timezone
+
+
+def _now() -> int:
+    """UTC Unix timestamp in seconds.
+    GenLayer pins datetime.now(timezone.utc) to the transaction timestamp,
+    so all validators receive the same value — safe in deterministic writes.
+    """
+    return int(datetime.now(timezone.utc).timestamp())
 
 
 # ============================================================================
@@ -507,6 +460,9 @@ class CourtOfAgents(gl.Contract):
                 # by a party. run_judges() requires evidence_count > 0.
                 "evidence_count": 0,
                 "status": "awaiting_response",
+                # UTC Unix timestamp pinned to the transaction block by GenLayer,
+                # so all validators receive the same value.
+                "created_at": _now(),
             },
             sort_keys=True,
         )
@@ -773,8 +729,7 @@ class CourtOfAgents(gl.Contract):
 
         return results
 
-    @staticmethod
-    def _verdicts_adjacent(a: str, b: str) -> bool:
+    def _verdicts_adjacent(self, a: str, b: str) -> bool:
         if a == b:
             return True
         return b in ADJACENT_VERDICTS.get(a, ()) or a in ADJACENT_VERDICTS.get(b, ())

@@ -32,7 +32,7 @@ interface CaseCardProps {
   category: string;
   status: string;
   difficulty: number;
-  created_at: string;
+  created_at: string | null;
   index: number;
 }
 
@@ -65,9 +65,11 @@ export function AnimatedCaseCard({
                   {difficultyStars(difficulty)}
                 </span>
                 <span>
-                  {new Date(created_at).toLocaleDateString("en-US", {
-                    month: "short", day: "numeric", year: "numeric",
-                  })}
+                  {created_at
+                    ? new Date(created_at).toLocaleDateString("en-US", {
+                        month: "short", day: "numeric", year: "numeric",
+                      })
+                    : "—"}
                 </span>
               </div>
             </div>

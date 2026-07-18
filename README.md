@@ -10,11 +10,11 @@ Deployed on GenLayer StudioNet (Chain ID: 61999)
 
 | Contract | Address |
 |---|---|
-| CourtOfAgents (merged) | `0xb468b1db949E7B40Be2bb8E6e33C1802d171524B` |
+| CourtOfAgents (merged) | `0x3aabaEbd7F86B2dc32a6f4e1f371B7Ff3bE4e144` |
 
 ## How It Works
 
-1. **Connect Wallet** — Your GenLayer wallet is your on-chain identity. Every action is signed by your wallet; the app never holds your private key server-side.
+1. **Connect Wallet** — Connect MetaMask or Rabby via EIP-1193. GenLayer StudioNet (chain ID 61999) is added and switched automatically. Your wallet signs every transaction; the app never stores private keys. The connected address persists across page refreshes via localStorage.
 2. **Agent A Creates a Case** — The claimant describes the dispute and names a respondent wallet address. The case is recorded on-chain in `awaiting_response` status.
 3. **Agent B Responds** — Only the wallet named as respondent can submit the counter-claim. The contract enforces this via `gl.message.sender_address`. Once submitted, the case moves to `pending`.
 4. **Both Parties Attach Web Evidence** — Either party submits a URL via `attach_web_evidence()`. GenLayer fetches the live page, has an LLM summarize only what is genuinely there, and validators independently re-fetch the same URL to reach consensus. At least one evidence entry is required before judges can run.
@@ -54,7 +54,7 @@ awaiting_response → pending → deliberating → consensus_reached
 | Database | Supabase (PostgreSQL) |
 | Blockchain | GenLayer StudioNet (Chain ID: 61999) |
 | Smart Contracts | GenLayer Intelligent Contracts (Python) |
-| SDK | genlayer-js v1.1.7 |
+| SDK | genlayer-js v1.1.8 |
 | AI | GenLayer LLMs via `gl.nondet.exec_prompt()` and `gl.vm.run_nondet_unsafe` |
 | Deployment | Vercel |
 
@@ -71,12 +71,8 @@ court-of-agents/
 │   ├── leaderboard/              # Ranked adjudicators
 │   ├── profile/                  # User profile with on-chain reputation
 │   └── api/                      # API routes
-│       ├── contracts/            # GenLayer contract interactions
-│       ├── wallet/               # Wallet creation & connection
-│       ├── cases/                # Case CRUD
+│       ├── cases/                # Case metadata (Supabase mirror)
 │       ├── evidence/             # Evidence mirroring to Supabase
-│       ├── agents/               # AI judge engine
-│       ├── consensus/            # Consensus calculation
 │       └── decisions/            # User verdict submission
 ├── intelligent-contracts/        # GenLayer Intelligent Contracts
 │   └── court_of_agents/contract.py  # Single merged contract: cases, evidence,
@@ -92,7 +88,8 @@ court-of-agents/
 ├── types/                        # TypeScript type definitions
 ├── database/                     # SQL schema, seed data, migrations
 │   └── migration-two-party-cases.sql
-└── scripts/                      # Deployment scripts
+└── scripts/
+│   └── e2e-test.mjs              # Full on-chain end-to-end test (node scripts/e2e-test.mjs)
 ```
 
 ## Intelligent Contract
@@ -118,10 +115,13 @@ A single merged contract that replaces the previous 3-contract design (adjudicat
 | `get_reputation()` / `get_dispute()` / `get_stats()` | view | Reputation and audit-log reads |
 
 Key implementation notes:
+- `created_at` stored as a UTC Unix timestamp (seconds) using `datetime.now(timezone.utc)`. GenLayer pins this to the transaction block timestamp so all validators receive the same value — deterministic across the network.
 - `agreement_ratio_pct` stored as `int` (0–100) internally — Python `float` cannot be serialized across the GenVM calldata boundary.
 - `_ascii_safe()` transliterates smart quotes and em-dashes before passing text to LLM prompts.
 - `evidence_count` tracked as int on each case; `run_judges()` raises if it is zero.
 - `Address(str)` constructor used for all wallet comparisons — never raw string equality.
+- Web access via `gl.nondet.web.get(url)` inside `attach_web_evidence()` — every GenVM validator independently fetches the same URL, ensuring identical raw content for LLM summarization.
+- LLM access via `gl.nondet.exec_prompt()` and `gl.vm.run_nondet_unsafe` — used for evidence summarization, judge verdicts, and consensus synthesis.
 
 Reputation ranks:
 
@@ -158,16 +158,16 @@ cp .env.example .env.local
 
 Required variables:
 
-| Variable | Description |
-|---|---|
-| `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anon key |
-| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key |
-| `NEXT_PUBLIC_GENLAYER_RPC_URL` | `https://studio.genlayer.com/api` |
-| `NEXT_PUBLIC_GENLAYER_CHAIN_ID` | `61999` |
-| `NEXT_PUBLIC_COURT_CONTRACT_ADDRESS` | Deployed CourtOfAgents contract address |
+| Variable | Required | Description |
+|---|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` | Optional | Supabase project URL — app falls back to on-chain reads when absent |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Optional | Supabase anon key |
+| `SUPABASE_SERVICE_ROLE_KEY` | Optional | Supabase service role key |
+| `NEXT_PUBLIC_GENLAYER_RPC_URL` | Yes | `https://studio.genlayer.com/api` |
+| `NEXT_PUBLIC_GENLAYER_CHAIN_ID` | Yes | `61999` |
+| `NEXT_PUBLIC_COURT_CONTRACT_ADDRESS` | Yes | `0x3aabaEbd7F86B2dc32a6f4e1f371B7Ff3bE4e144` |
 
-Note: `GENLAYER_PRIVATE_KEY` is intentionally absent — users sign their own transactions via their wallet.
+Note: `GENLAYER_PRIVATE_KEY` is intentionally absent — users sign their own transactions via MetaMask / Rabby. No private key is ever stored by this application.
 
 ### Database Setup
 
