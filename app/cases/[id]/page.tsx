@@ -1,6 +1,5 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { createSupabaseAdmin } from "@/services/supabase/server";
 import { getGenLayerClient, CONTRACT_ADDRESSES } from "@/services/genlayer/client";
 import { Header } from "@/components/layout/header";
 import { Badge } from "@/components/ui/badge";
@@ -26,11 +25,11 @@ const statusVariants: Record<string, "default" | "info" | "warning" | "success" 
 };
 
 const verdictLabels: Record<string, string> = {
-  favor_a: "Favor Agent A",
-  favor_b: "Favor Agent B",
-  partial_a: "Partial - Agent A",
-  partial_b: "Partial - Agent B",
-  dismiss: "Dismissed",
+  FAVOR_A: "Favor Agent A",
+  FAVOR_B: "Favor Agent B",
+  PARTIAL_A: "Partial — Agent A",
+  PARTIAL_B: "Partial — Agent B",
+  DISMISS: "Dismissed",
 };
 
 export default async function CaseDetailPage({
@@ -39,79 +38,53 @@ export default async function CaseDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const supabase = createSupabaseAdmin();
 
-  // ── All reads from the GenLayer contract ─────────────────────────────────
+  let caseData: Record<string, any> | null = null;
   let verdicts: OnChainVerdict[] | null = null;
   let consensus: OnChainConsensus | null = null;
-  let onChainCase: Record<string, any> | null = null;
 
   try {
     const { client } = getGenLayerClient();
-    const adjAddr = CONTRACT_ADDRESSES.adjudicator;
+    const addr = CONTRACT_ADDRESSES.adjudicator;
 
     const [rawCase, rawVerdicts, rawConsensus] = await Promise.all([
-      client.readContract({ address: adjAddr, functionName: "get_case", args: [id] }),
-      client.readContract({ address: adjAddr, functionName: "get_verdicts", args: [id] }),
-      client.readContract({ address: adjAddr, functionName: "get_consensus", args: [id] }),
+      client.readContract({ address: addr, functionName: "get_case", args: [id] }),
+      client.readContract({ address: addr, functionName: "get_verdicts", args: [id] }),
+      client.readContract({ address: addr, functionName: "get_consensus", args: [id] }),
     ]);
 
-    if (rawCase) onChainCase = JSON.parse(rawCase as string);
+    if (rawCase) {
+      const parsed = JSON.parse(rawCase as string);
+      // Normalise: contract uses "argument"; UI expects "detailed_argument"
+      const norm = (claim: any) =>
+        claim
+          ? { ...claim, detailed_argument: claim.argument ?? claim.detailed_argument ?? "" }
+          : null;
+      caseData = {
+        ...parsed,
+        id: parsed.case_id ?? id,
+        claim_a: norm(parsed.claim_a),
+        claim_b: norm(parsed.claim_b),
+      };
+    }
     if (rawVerdicts) verdicts = JSON.parse(rawVerdicts as string) as OnChainVerdict[];
     if (rawConsensus) consensus = JSON.parse(rawConsensus as string) as OnChainConsensus;
   } catch {
-    // StudioNet temporarily unreachable — fall through to Supabase only.
+    // StudioNet temporarily unreachable
   }
-
-  // ── Case metadata: Supabase first (fast), fall back to on-chain ──────────
-  const { data: supabaseCase } = await supabase
-    .from("cases")
-    .select("*")
-    .eq("id", id)
-    .single();
-
-  // Normalise on-chain shape to match what the JSX below expects.
-  // Contract uses "argument"; Supabase uses "detailed_argument".
-  function normaliseFromChain(raw: Record<string, any>) {
-    const norm = (claim: any) =>
-      claim
-        ? { ...claim, detailed_argument: claim.argument ?? claim.detailed_argument ?? "" }
-        : null;
-    return {
-      ...raw,
-      id: raw.case_id ?? id,
-      claim_a: norm(raw.claim_a),
-      claim_b: norm(raw.claim_b),
-      on_chain_tx: null,
-    };
-  }
-
-  const caseData: Record<string, any> | null =
-    supabaseCase ?? (onChainCase ? normaliseFromChain(onChainCase) : null);
 
   if (!caseData) notFound();
 
-  // Evidence: from Supabase if available, otherwise infer from contract evidence_count.
-  const { data: supabaseEvidence } = await supabase
-    .from("evidence")
-    .select("*")
-    .eq("case_id", id)
-    .order("created_at", { ascending: true });
-
-  const evidence = supabaseEvidence ?? [];
-
-  // hasEvidence: Supabase rows OR contract evidence_count > 0
-  const hasEvidence =
-    evidence.length > 0 || (onChainCase?.evidence_count ?? 0) > 0;
-
   const claimA = caseData.claim_a as Record<string, string>;
   const claimB = caseData.claim_b as Record<string, string> | null;
+  const hasEvidence = (caseData.evidence_count ?? 0) > 0;
+  const evidenceSummary: string = caseData.evidence_summary ?? "";
 
   return (
     <div className="flex min-h-screen flex-col">
       <Header />
       <main className="mx-auto w-full max-w-5xl px-6 py-10">
-        {/* Back link */}
+        {/* Back */}
         <Link
           href="/cases"
           className="mb-6 inline-flex items-center text-sm text-neutral-500 hover:text-neutral-700"
@@ -122,9 +95,7 @@ export default async function CaseDetailPage({
         {/* Case Header */}
         <div className="mb-8">
           <div className="flex items-center gap-3 mb-2">
-            <h1 className="text-3xl font-bold text-neutral-900">
-              {caseData.title}
-            </h1>
+            <h1 className="text-3xl font-bold text-neutral-900">{caseData.title}</h1>
             <Badge variant={statusVariants[caseData.status] || "default"}>
               {caseData.status.replace(/_/g, " ")}
             </Badge>
@@ -135,37 +106,19 @@ export default async function CaseDetailPage({
         {/* Claims */}
         <div className="grid gap-4 md:grid-cols-2 mb-8">
           <Card className="border-l-4 border-l-blue-500">
-            <CardTitle className="text-blue-700">
-              Agent A: {claimA.agent_name}
-            </CardTitle>
-            <CardDescription className="mt-1 font-medium">
-              {claimA.summary}
-            </CardDescription>
+            <CardTitle className="text-blue-700">Agent A: {claimA.agent_name}</CardTitle>
+            <CardDescription className="mt-1 font-medium">{claimA.summary}</CardDescription>
             <CardContent className="mt-3">
-              <p className="text-sm text-neutral-600">
-                {claimA.detailed_argument}
-              </p>
-              <p className="mt-3 text-sm font-medium text-blue-600">
-                Requested: {claimA.requested_outcome}
-              </p>
+              <p className="text-sm text-neutral-600">{claimA.detailed_argument}</p>
             </CardContent>
           </Card>
 
           {claimB ? (
             <Card className="border-l-4 border-l-red-500">
-              <CardTitle className="text-red-700">
-                Agent B: {claimB.agent_name}
-              </CardTitle>
-              <CardDescription className="mt-1 font-medium">
-                {claimB.summary}
-              </CardDescription>
+              <CardTitle className="text-red-700">Agent B: {claimB.agent_name}</CardTitle>
+              <CardDescription className="mt-1 font-medium">{claimB.summary}</CardDescription>
               <CardContent className="mt-3">
-                <p className="text-sm text-neutral-600">
-                  {claimB.detailed_argument}
-                </p>
-                <p className="mt-3 text-sm font-medium text-red-600">
-                  Requested: {claimB.requested_outcome}
-                </p>
+                <p className="text-sm text-neutral-600">{claimB.detailed_argument}</p>
               </CardContent>
             </Card>
           ) : (
@@ -182,63 +135,28 @@ export default async function CaseDetailPage({
           )}
         </div>
 
-        {/* Evidence */}
+        {/* Evidence — from on-chain evidence_summary */}
         <div className="mb-8">
-          <h2 className="text-xl font-bold text-neutral-900 mb-4">Evidence</h2>
-          {!evidence || evidence.length === 0 ? (
-            <p className="text-neutral-500">No evidence submitted.</p>
+          <h2 className="text-xl font-bold text-neutral-900 mb-4">
+            Evidence{" "}
+            {hasEvidence && (
+              <span className="text-sm font-normal text-green-600">
+                — {caseData.evidence_count} piece{caseData.evidence_count !== 1 ? "s" : ""} verified on-chain
+              </span>
+            )}
+          </h2>
+          {!hasEvidence ? (
+            <p className="text-neutral-500">No evidence submitted yet.</p>
           ) : (
-            <div className="space-y-3">
-              {evidence.map((e) => (
-                <Card key={e.id} className="py-4">
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <div className="flex items-center gap-2 mb-1">
-                        <h3 className="font-semibold text-neutral-900">
-                          {e.title}
-                        </h3>
-                        <Badge variant="default">{e.type}</Badge>
-                        <Badge
-                          variant={
-                            e.submitted_by === "agent_a"
-                              ? "info"
-                              : e.submitted_by === "agent_b"
-                                ? "danger"
-                                : "default"
-                          }
-                        >
-                          {e.submitted_by.replace("_", " ")}
-                        </Badge>
-                      </div>
-                      <p className="text-sm text-neutral-600 mb-2">
-                        {e.description}
-                      </p>
-                      <div className="rounded-lg bg-neutral-50 p-3 text-sm text-neutral-700 font-mono">
-                        {e.content}
-                      </div>
-                    </div>
-                    <div className="ml-4 text-right">
-                      <div className="text-xs text-neutral-500">Credibility</div>
-                      <div
-                        className={`text-lg font-bold ${
-                          e.credibility_score >= 80
-                            ? "text-green-600"
-                            : e.credibility_score >= 60
-                              ? "text-yellow-600"
-                              : "text-red-600"
-                        }`}
-                      >
-                        {e.credibility_score}%
-                      </div>
-                    </div>
-                  </div>
-                </Card>
-              ))}
-            </div>
+            <Card>
+              <p className="text-sm text-neutral-700 whitespace-pre-wrap leading-relaxed">
+                {evidenceSummary}
+              </p>
+            </Card>
           )}
         </div>
 
-        {/* Respond to case (only shown while awaiting_response) */}
+        {/* Respond to case */}
         <RespondToCase
           caseId={id}
           caseStatus={caseData.status}
@@ -246,8 +164,7 @@ export default async function CaseDetailPage({
           claimantAddress={caseData.claimant_address || ""}
         />
 
-        {/* Evidence submission — real, fetched-and-verified evidence only.
-            Required (evidence.length > 0) before judges can run. */}
+        {/* Attach evidence */}
         {claimB && (!verdicts || verdicts.length === 0) && (
           <div className="mb-4">
             <AttachEvidence
@@ -259,7 +176,7 @@ export default async function CaseDetailPage({
           </div>
         )}
 
-        {/* Action Buttons — only meaningful once claim_b exists */}
+        {/* Run judges / consensus */}
         {claimB && (
           <div className="mb-8">
             <RunJudgesButton
@@ -271,14 +188,12 @@ export default async function CaseDetailPage({
           </div>
         )}
 
-        {/* Verdicts — read from get_verdicts() contract view */}
+        {/* Verdicts */}
         {verdicts && verdicts.length > 0 && (
           <div className="mb-8">
             <h2 className="text-xl font-bold text-neutral-900 mb-4">
               Judge Verdicts{" "}
-              <span className="text-sm font-normal text-green-600">
-                — verified on-chain
-              </span>
+              <span className="text-sm font-normal text-green-600">— verified on-chain</span>
             </h2>
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
               {verdicts.map((v) => (
@@ -287,9 +202,7 @@ export default async function CaseDetailPage({
                     <h3 className="font-semibold text-neutral-900 capitalize">
                       {v.persona} Judge
                     </h3>
-                    <span className="text-lg font-bold text-brand-600">
-                      {v.confidence}%
-                    </span>
+                    <span className="text-lg font-bold text-brand-600">{v.confidence}%</span>
                   </div>
                   <Badge
                     variant={
@@ -303,23 +216,19 @@ export default async function CaseDetailPage({
                   >
                     {verdictLabels[v.verdict] || v.verdict}
                   </Badge>
-                  <p className="text-sm text-neutral-600 line-clamp-4">
-                    {v.reasoning}
-                  </p>
+                  <p className="text-sm text-neutral-600 line-clamp-4">{v.reasoning}</p>
                 </Card>
               ))}
             </div>
           </div>
         )}
 
-        {/* Consensus — read from get_consensus() contract view */}
+        {/* Consensus */}
         {consensus && (
           <div className="mb-8">
             <h2 className="text-xl font-bold text-neutral-900 mb-4">
               Consensus Result{" "}
-              <span className="text-sm font-normal text-green-600">
-                — verified on-chain
-              </span>
+              <span className="text-sm font-normal text-green-600">— verified on-chain</span>
             </h2>
             <Card className="border-2 border-brand-200 bg-brand-50/30">
               <div className="flex items-center justify-between mb-4">
@@ -338,10 +247,8 @@ export default async function CaseDetailPage({
                   <div className="text-xs text-neutral-500">confidence</div>
                 </div>
               </div>
-              <div className="text-sm text-neutral-700 mb-3">
-                {consensus.resolution_explanation}
-              </div>
-              <div className="flex items-center justify-between mt-4 pt-4 border-t border-neutral-200">
+              <p className="text-sm text-neutral-700 mb-4">{consensus.resolution_explanation}</p>
+              <div className="flex items-center justify-between pt-4 border-t border-neutral-200">
                 <div className="text-xs text-neutral-500">
                   Agreement: {Math.round(consensus.agreement_ratio * 100)}% |{" "}
                   Judges: {consensus.participating_judges.length}
@@ -352,7 +259,7 @@ export default async function CaseDetailPage({
                   claimASummary={claimA.summary}
                   claimBSummary={claimB?.summary || ""}
                   consensusVerdict={consensus.final_verdict}
-                  hasOnChainTx={!!caseData.onchain_tx_hash}
+                  hasOnChainTx={caseData.status === "finalized"}
                 />
               </div>
             </Card>
@@ -367,7 +274,7 @@ export default async function CaseDetailPage({
           respondentAddress={caseData.respondent_address || ""}
         />
 
-        {/* User Decision — only available once on-chain consensus exists */}
+        {/* User decision */}
         <SubmitDecision caseId={id} hasConsensus={!!consensus} />
       </main>
     </div>

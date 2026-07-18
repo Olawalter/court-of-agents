@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { createSupabaseAdmin } from "@/services/supabase/server";
 import { getGenLayerClient, CONTRACT_ADDRESSES } from "@/services/genlayer/client";
 import { Header } from "@/components/layout/header";
 import { AnimatedCaseCard } from "@/features/cases/components/animated-case-card";
@@ -7,46 +6,37 @@ import { AnimatedCaseCard } from "@/features/cases/components/animated-case-card
 export const dynamic = "force-dynamic";
 
 export default async function CasesPage() {
-  const supabase = createSupabaseAdmin();
-  const { data: supabaseCases } = await supabase
-    .from("cases")
-    .select("*")
-    .order("created_at", { ascending: false });
+  let cases: any[] = [];
 
-  // Fall back to on-chain enumeration when Supabase is not configured.
-  let cases: any[] = supabaseCases ?? [];
-  if (cases.length === 0) {
-    try {
-      const { client } = getGenLayerClient();
-      const addr = CONTRACT_ADDRESSES.adjudicator;
-      const rawIds = await client.readContract({
-        address: addr,
-        functionName: "list_case_ids",
-        args: [0, 50],
-      });
-      if (rawIds) {
-        const ids: string[] = JSON.parse(rawIds as string);
-        const rawCases = await Promise.all(
-          ids.map((cid) =>
-            client.readContract({ address: addr, functionName: "get_case", args: [cid] })
-          )
-        );
-        cases = rawCases
-          .filter(Boolean)
-          .map((r) => JSON.parse(r as string))
-          .map((c) => ({
-            ...c,
-            id: c.case_id,
-            // Convert on-chain unix timestamp (seconds) to ISO string
-            created_at: c.created_at
-              ? new Date(c.created_at * 1000).toISOString()
-              : null,
-          }))
-          .reverse(); // newest first
-      }
-    } catch {
-      // StudioNet unreachable — show empty list
+  try {
+    const { client } = getGenLayerClient();
+    const addr = CONTRACT_ADDRESSES.adjudicator;
+    const rawIds = await client.readContract({
+      address: addr,
+      functionName: "list_case_ids",
+      args: [0, 50],
+    });
+    if (rawIds) {
+      const ids: string[] = JSON.parse(rawIds as string);
+      const rawCases = await Promise.all(
+        ids.map((cid) =>
+          client.readContract({ address: addr, functionName: "get_case", args: [cid] })
+        )
+      );
+      cases = rawCases
+        .filter(Boolean)
+        .map((r) => JSON.parse(r as string))
+        .map((c) => ({
+          ...c,
+          id: c.case_id,
+          created_at: c.created_at
+            ? new Date(c.created_at * 1000).toISOString()
+            : null,
+        }))
+        .reverse(); // newest first
     }
+  } catch {
+    // StudioNet unreachable — show empty list
   }
 
   return (
@@ -68,7 +58,7 @@ export default async function CasesPage() {
           </Link>
         </div>
 
-        {!cases || cases.length === 0 ? (
+        {cases.length === 0 ? (
           <p className="text-neutral-500">No cases found.</p>
         ) : (
           <ul className="grid gap-4 list-none p-0 m-0" aria-label="Cases">
